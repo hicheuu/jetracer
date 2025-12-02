@@ -1,6 +1,8 @@
 # scripts/low_speed_check.py
 import time
-from jetracer.nvidia_racecar import NvidiaRacecar
+
+from jetracer.core import NvidiaRacecar
+
 
 class LowSpeedMapper:
     def __init__(self, min_duty=0.08, low_zone=0.3, throttle_gain=0.5):
@@ -22,6 +24,7 @@ class LowSpeedMapper:
 
         pwm = int(0xFFFF * mag)
         return pwm, sign
+
 
 def apply_pwm(car, pwm, direction):
     channels = car.motor._pca.channels
@@ -49,6 +52,7 @@ def apply_pwm(car, pwm, direction):
         channels[6].duty_cycle = 0
         channels[5].duty_cycle = 0xFFFF
 
+
 def sweep_low_speed(car, mapper, start=0.05, stop=0.30, step=0.02, dwell=1.5):
     throttle = start
     while throttle <= stop:
@@ -59,7 +63,10 @@ def sweep_low_speed(car, mapper, start=0.05, stop=0.30, step=0.02, dwell=1.5):
         throttle += step
     apply_pwm(car, 0, 0)
 
+
 if __name__ == "__main__":
     car = NvidiaRacecar()
     mapper = LowSpeedMapper(min_duty=0.08, low_zone=0.3, throttle_gain=0.5)
     sweep_low_speed(car, mapper)
+
+

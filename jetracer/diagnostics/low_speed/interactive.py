@@ -1,10 +1,12 @@
 # scripts/low_speed_check.py
 try:
-    import msvcrt  # Windows
+    import msvcrt
+
     getch = msvcrt.getch
 except ImportError:
-    from getch import getch  # Linuxfrom jetracer.nvidia_racecar import NvidiaRacecar
-from jetracer.nvidia_racecar import NvidiaRacecar
+    from getch import getch  # Linux
+
+from jetracer.core import NvidiaRacecar
 
 
 class LowSpeedMapper:
@@ -27,6 +29,7 @@ class LowSpeedMapper:
 
         return sign * min(1.0, mag)
 
+
 def interactive_low_speed(car, mapper, start=0.0, step=0.01):
     throttle = start
     try:
@@ -40,13 +43,13 @@ def interactive_low_speed(car, mapper, start=0.0, step=0.01):
             except UnicodeDecodeError:
                 continue
 
-            if key == 'w':
+            if key == "w":
                 throttle = min(throttle + step, 1.0)
-            elif key == 's':
+            elif key == "s":
                 throttle = max(throttle - step, -1.0)
-            elif key == 'r':
+            elif key == "r":
                 throttle = 0.0
-            elif key == 'q':
+            elif key == "q":
                 break
             else:
                 continue
@@ -59,7 +62,10 @@ def interactive_low_speed(car, mapper, start=0.0, step=0.01):
     finally:
         car.throttle = 0.0
 
+
 if __name__ == "__main__":
     car = NvidiaRacecar()
     mapper = LowSpeedMapper(min_output=0.08, low_zone=0.3)
     interactive_low_speed(car, mapper)
+
+

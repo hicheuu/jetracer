@@ -1,4 +1,5 @@
-from jetracer.nvidia_racecar import NvidiaRacecar
+from jetracer.core import NvidiaRacecar
+
 
 def main():
     car = NvidiaRacecar()
@@ -23,5 +24,7 @@ def main():
         car.throttle = 0.0
         car.steering = 0.0
 
+
 if __name__ == "__main__":
     main()
+
