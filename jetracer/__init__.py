@@ -1,1 +1,1 @@
-# jetracer package
+from .racecar import Racecar
