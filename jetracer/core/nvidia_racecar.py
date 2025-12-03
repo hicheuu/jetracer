@@ -24,35 +24,67 @@ class NvidiaRacecar(Racecar):
         super().__init__(*args, **kwargs)
         self.kit = ServoKit(channels=16, address=self.i2c_address)
         self.kit._pca.frequency = 60
-        self.steering_motor = self.kit.continuous_servo[self.steering_channel]
-        self.throttle_motor = self.kit.continuous_servo[self.throttle_channel]
+        self.steering_motor = self.kit.continuous_servo[self.throttle_channel]
+        self.throttle_motor = self.kit.continuous_servo[self.steering_channel]
         self.steering_motor.throttle = 0
         self.throttle_motor.throttle = 0
         
-        # 직접 I2C를 초기화하지 않고, battery_monitor.py가 써놓은 파일만 읽음
-        # 충돌 방지 및 성능 향상
+        # 직접 I2C를 초기화하지 않고, `battery_monitor.py`가 /dev/shm에 써놓은
+        # 현재 전압 파일을 읽어 전압 보상을 적용합니다 (충돌 방지 및 성능 향상).
+
+        # 전압 상태를 10초마다 출력하는 리포터 스레드 시작
+        self._reporter_stop = threading.Event()
+        self._reporter_thread = threading.Thread(target=self._voltage_reporter, daemon=True)
+        self._reporter_thread.start()
 
     def _get_voltage_gain(self):
         """파일에서 현재 배터리 전압을 읽어 보정 계수를 계산합니다."""
         if not self.voltage_compensation:
             return 1.0
-        
+        # 읽기 로직을 별도 헬퍼로 분리
+        current_voltage = self._read_voltage()
+
+        if current_voltage is None:
+            return 1.0
+
+        # 비정상적으로 낮은 전압(센서 오류 등)에서는 보정 중단
+        if current_voltage < 1.0:
+            return 1.0
+
+        # 보정 계수 = 기준전압 / 현재전압
+        gain = self.reference_voltage / current_voltage
+        return gain
+
+    def _read_voltage(self):
+        """/dev/shm에 저장된 전압 값을 읽어 float으로 반환합니다.
+
+        실패 시 `None`을 반환합니다.
+        """
         try:
             # /dev/shm은 RAM Disk이므로 매우 빠름
             with open("/dev/shm/jetracer_voltage", "r") as f:
                 raw = f.read().strip()
-                current_voltage = float(raw)
-            
-            # 비정상적으로 낮은 전압(센서 오류 등)에서는 보정 중단
-            if current_voltage < 1.0:
-                return 1.0
-                
-            # 보정 계수 = 기준전압 / 현재전압
-            gain = self.reference_voltage / current_voltage
-            return gain
+                return float(raw)
         except Exception:
-            # 파일이 없거나 읽기 실패 시 보정 없이 1.0 반환
-            return 1.0
+            return None
+
+    def _voltage_reporter(self):
+        """10초 간격으로 전압/게인 상태 메시지를 출력하는 백그라운드 루프."""
+        while not self._reporter_stop.is_set():
+            try:
+                current_voltage = self._read_voltage()
+                gain = self._get_voltage_gain()
+
+                if current_voltage is None:
+                    print("[jetracer][battery] no voltage info in /dev/shm/jetracer_voltage; using gain=%.3f" % (gain,))
+                else:
+                    print("[jetracer][battery] voltage=%.2fV  gain=%.3f" % (current_voltage, gain))
+            except Exception:
+                # 리포터에서의 예외는 무시하고 계속 실행
+                print("[jetracer][battery] reporter error")
+
+            # 이벤트 대기(중단 가능), 기본 10초
+            self._reporter_stop.wait(10)
 
     @traitlets.observe("steering")
     def _on_steering(self, change):
