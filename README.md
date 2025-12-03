@@ -55,7 +55,7 @@ After=network-online.target
 Type=simple
 User=%i
 WorkingDirectory=/home/%i/jetracer
-ExecStart=/usr/bin/python3 -m jetracer.diagnostics.battery_monitor
+ExecStart=/home/%i/miniforge3/envs/jet/bin/python3 -m jetracer.diagnostics.battery_monitor
 Restart=always
 RestartSec=2
 Environment=PYTHONUNBUFFERED=1
