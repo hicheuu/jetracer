@@ -35,3 +35,39 @@ python -m jetracer.diagnostics.battery_monitor
 ```
 
 각 스크립트는 `Ctrl+C` 로 안전하게 종료되며, 종료 블록에서 스로틀과 스티어링을 0으로 리셋합니다.
+
+
+## JetRacer Battery Monitor Auto Start (systemd)
+
+1. systemd 템플릿 서비스 생성
+sudo nano /etc/systemd/system/battery_monitor@.service
+
+내용:
+
+[Unit]
+Description=JetRacer Battery Monitor (%i)
+After=network-online.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/bin/python3 /home/%i/jetracer/jetracer/diagnostics/battery_monitor.py
+Restart=always
+RestartSec=2
+WorkingDirectory=/home/%i/jetracer/jetracer/diagnostics
+
+[Install]
+WantedBy=multi-user.target
+
+2. 활성화 및 실행
+sudo systemctl daemon-reload
+sudo systemctl enable battery_monitor@<username>.service
+sudo systemctl start  battery_monitor@<username>.service
+
+3. 상태/로그 확인
+systemctl status battery_monitor@<username>.service
+journalctl -u battery_monitor@<username>.service -f
+
+주의
+
+<username>에는 실제 로그인 계정명(whoami)을 넣는다.
