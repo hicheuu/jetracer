@@ -17,14 +17,14 @@ def apply_deadzone(v, dz):
 
 def main():
     ap = argparse.ArgumentParser(description="Joystick -> JetRacer (pure Python)")
-    ap.add_argument("--steer-axis", type=int, default=0, help="steering axis index (default: 0)")
-    ap.add_argument("--throttle-axis", type=int, default=1, help="throttle axis index (default: 1)")
+    ap.add_argument("--steer-axis", type=int, default=0, help="steering axis index (default: 0, 왼쪽스틱 좌우)")
+    ap.add_argument("--throttle-axis", type=int, default=4, help="throttle axis index (default: 3, 오른쪽스틱 위아래)")
     ap.add_argument("--invert-steer", action="store_true", help="invert steering")
-    ap.add_argument("--invert-throttle", action="store_true", help="invert throttle")
+    ap.add_argument("--invert-throttle", action="store_true", default=True, help="invert throttle (기본 활성화)")
     ap.add_argument("--deadzone", type=float, default=0.08, help="deadzone for axes")
     ap.add_argument("--throttle-mode", choices=["stick", "trigger"], default="stick", help="stick: -1..1 -> 0..1 매핑 / trigger: 0..1 가정")
     ap.add_argument("--steer-scale", type=float, default=1.0, help="steering scale (0~1)")
-    ap.add_argument("--throttle-scale", type=float, default=0.3, help="throttle scale (0~1)")
+    ap.add_argument("--throttle-scale", type=float, default=0.15, help="throttle scale (0~1)")
     args = ap.parse_args()
 
     pygame.init()

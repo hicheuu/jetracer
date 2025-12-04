@@ -11,7 +11,7 @@ class NvidiaRacecar(Racecar):
 
     i2c_address = traitlets.Integer(default_value=0x40)
     steering_gain = traitlets.Float(default_value=-0.65)
-    steering_offset = traitlets.Float(default_value=0)
+    steering_offset = traitlets.Float(default_value=0.22, help="스티어링 중앙 오프셋")
     steering_channel = traitlets.Integer(default_value=1)
     throttle_gain = traitlets.Float(default_value=0.8)
     throttle_offset = traitlets.Float(default_value=0.0, help="ESC 스로틀 오프셋")
@@ -27,9 +27,13 @@ class NvidiaRacecar(Racecar):
         self.kit._pca.frequency = 60
         self.steering_motor = self.kit.continuous_servo[self.steering_channel]
         self.throttle_motor = self.kit.continuous_servo[self.throttle_channel]
-        self.steering_motor.throttle = 0
+        self.steering_motor.throttle = self.steering_offset  # 스티어링 중앙으로 초기화
         self.throttle_motor.throttle = 0.12  # ESC 중립점으로 초기화
+        self._last_printed_steering = None  # 마지막 출력된 steering 값
         self._last_printed_throttle = None  # 마지막 출력된 throttle 값
+        
+        # traitlets observer 강제 트리거 (초기값 적용)
+        self.steering = 0.0
         
         # 직접 I2C를 초기화하지 않고, `battery_monitor.py`가 /dev/shm에 써놓은
         # 현재 전압 파일을 읽어 전압 보상을 적용합니다 (충돌 방지 및 성능 향상).
@@ -90,7 +94,15 @@ class NvidiaRacecar(Racecar):
 
     @traitlets.observe("steering")
     def _on_steering(self, change):
-        self.steering_motor.throttle = change["new"] * self.steering_gain + self.steering_offset
+        final_steering = change["new"] * self.steering_gain + self.steering_offset
+        
+        # 최종 모터 출력값 표시 (값이 변할 때만)
+        rounded = round(final_steering, 2)
+        if rounded != self._last_printed_steering:
+            print(f"[motor] steering={final_steering:+.3f}")
+            self._last_printed_steering = rounded
+        
+        self.steering_motor.throttle = final_steering
 
     @traitlets.observe("throttle")
     def _on_throttle(self, change):
