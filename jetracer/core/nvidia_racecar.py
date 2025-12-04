@@ -1,4 +1,5 @@
 import threading
+import time
 import traitlets
 from adafruit_servokit import ServoKit
 import os
@@ -12,9 +13,9 @@ class NvidiaRacecar(Racecar):
     i2c_address = traitlets.Integer(default_value=0x40)
     steering_gain = traitlets.Float(default_value=-0.65)
     steering_offset = traitlets.Float(default_value=0)
-    steering_channel = traitlets.Integer(default_value=0)
+    steering_channel = traitlets.Integer(default_value=1)
     throttle_gain = traitlets.Float(default_value=0.8)
-    throttle_channel = traitlets.Integer(default_value=1)
+    throttle_channel = traitlets.Integer(default_value=0)
     
     # 전압 보상 관련 설정
     voltage_compensation = traitlets.Bool(default_value=True, help="배터리 전압 보상 기능 활성화 여부")
@@ -24,10 +25,14 @@ class NvidiaRacecar(Racecar):
         super().__init__(*args, **kwargs)
         self.kit = ServoKit(channels=16, address=self.i2c_address)
         self.kit._pca.frequency = 60
-        self.steering_motor = self.kit.continuous_servo[self.throttle_channel]
-        self.throttle_motor = self.kit.continuous_servo[self.steering_channel]
+        self.steering_motor = self.kit.continuous_servo[self.steering_channel]
+        self.throttle_motor = self.kit.continuous_servo[self.throttle_channel]
         self.steering_motor.throttle = 0
         self.throttle_motor.throttle = 0
+        
+        # ESC 후진 시퀀스 관련 상태 추적
+        self._last_throttle = 0.0  # 이전 throttle 값
+        self._reverse_armed = False  # 후진 모드 활성화 여부
         
         # 직접 I2C를 초기화하지 않고, `battery_monitor.py`가 /dev/shm에 써놓은
         # 현재 전압 파일을 읽어 전압 보상을 적용합니다 (충돌 방지 및 성능 향상).
@@ -103,5 +108,21 @@ class NvidiaRacecar(Racecar):
             final_throttle = 1.0
         elif final_throttle < -1.0:
             final_throttle = -1.0
-            
+        
+        # 4. ESC 후진 시퀀스 처리
+        # 전진/정지 상태에서 후진으로 전환 시 브레이크-중립-후진 시퀀스 실행
+        if final_throttle < 0 and self._last_throttle >= 0 and not self._reverse_armed:
+            # 후진 시퀀스: 브레이크 → 중립 → 후진
+            self.throttle_motor.throttle = final_throttle  # 브레이크 신호
+            time.sleep(0.1)
+            self.throttle_motor.throttle = 0  # 중립
+            time.sleep(0.1)
+            self._reverse_armed = True  # 후진 모드 활성화됨
+        
+        # 전진 또는 정지로 돌아가면 후진 모드 해제
+        if final_throttle >= 0:
+            self._reverse_armed = False
+        
+        # 5. 최종 출력
+        self._last_throttle = final_throttle
         self.throttle_motor.throttle = final_throttle
