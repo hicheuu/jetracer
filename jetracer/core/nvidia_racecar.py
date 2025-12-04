@@ -14,7 +14,7 @@ class NvidiaRacecar(Racecar):
     steering_offset = traitlets.Float(default_value=0)
     steering_channel = traitlets.Integer(default_value=1)
     throttle_gain = traitlets.Float(default_value=0.8)
-    throttle_offset = traitlets.Float(default_value=0.12, help="ESC 중립점 오프셋 (기본 0.12)")
+    throttle_offset = traitlets.Float(default_value=0.0, help="ESC 스로틀 오프셋")
     throttle_channel = traitlets.Integer(default_value=0)
     
     # 전압 보상 관련 설정
@@ -28,7 +28,7 @@ class NvidiaRacecar(Racecar):
         self.steering_motor = self.kit.continuous_servo[self.steering_channel]
         self.throttle_motor = self.kit.continuous_servo[self.throttle_channel]
         self.steering_motor.throttle = 0
-        self.throttle_motor.throttle = self.throttle_offset  # ESC 중립점으로 초기화
+        self.throttle_motor.throttle = 0.12  # ESC 중립점으로 초기화
         
         # 직접 I2C를 초기화하지 않고, `battery_monitor.py`가 /dev/shm에 써놓은
         # 현재 전압 파일을 읽어 전압 보상을 적용합니다 (충돌 방지 및 성능 향상).

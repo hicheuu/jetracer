@@ -44,7 +44,7 @@ def main():
 
     car = NvidiaRacecar()
     car.steering = 0.0
-    car.throttle = 0.0
+    car.throttle = 0.12  # ESC 중립점
 
     try:
         while True:
@@ -61,13 +61,23 @@ def main():
             if args.invert_throttle:
                 thr = -thr
 
-            if args.throttle_mode == "stick":
-                throttle = (thr + 1.0) / 2.0
+            # ESC 중립점 및 후진 시작점 설정
+            ESC_NEUTRAL = 0.12  # 정지 상태
+            REVERSE_START = -0.1  # 후진 시작점
+            
+            if thr > 0:
+                # 전진: 0 → 0.12, 1 → 1.0
+                throttle_cmd = ESC_NEUTRAL + thr * (1.0 - ESC_NEUTRAL) * args.throttle_scale
+            elif thr < 0:
+                # 후진: 0 → -0.1, -1 → -1.0
+                throttle_cmd = REVERSE_START + thr * (1.0 - abs(REVERSE_START)) * args.throttle_scale
             else:
-                throttle = thr
-
+                throttle_cmd = ESC_NEUTRAL  # 정지
+            
+            # 안전 범위 클리핑
+            throttle_cmd = max(-1.0, min(1.0, throttle_cmd))
+            
             steering_cmd = clamp(steer * args.steer_scale)
-            throttle_cmd = max(0.0, min(1.0, throttle * args.throttle_scale))
 
             car.steering = steering_cmd
             car.throttle = throttle_cmd
@@ -82,7 +92,7 @@ def main():
         print("Exiting...")
     finally:
         car.steering = 0.0
-        car.throttle = 0.0
+        car.throttle = 0.12  # ESC 중립점
         pygame.quit()
 
 
