@@ -29,6 +29,7 @@ class NvidiaRacecar(Racecar):
         self.throttle_motor = self.kit.continuous_servo[self.throttle_channel]
         self.steering_motor.throttle = 0
         self.throttle_motor.throttle = 0.12  # ESC 중립점으로 초기화
+        self._last_printed_throttle = None  # 마지막 출력된 throttle 값
         
         # 직접 I2C를 초기화하지 않고, `battery_monitor.py`가 /dev/shm에 써놓은
         # 현재 전압 파일을 읽어 전압 보상을 적용합니다 (충돌 방지 및 성능 향상).
@@ -104,5 +105,11 @@ class NvidiaRacecar(Racecar):
             final_throttle = 1.0
         elif final_throttle < -1.0:
             final_throttle = -1.0
+        
+        # 최종 모터 출력값 표시 (값이 변할 때만)
+        rounded = round(final_throttle, 2)
+        if rounded != self._last_printed_throttle:
+            print(f"[motor] throttle={final_throttle:+.3f}")
+            self._last_printed_throttle = rounded
             
         self.throttle_motor.throttle = final_throttle
