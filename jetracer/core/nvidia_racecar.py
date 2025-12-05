@@ -23,7 +23,9 @@ class NvidiaRacecar(Racecar):
     # 전압 보상 관련 설정
     voltage_compensation = traitlets.Bool(default_value=True, help="배터리 전압 보상 기능 활성화 여부")
     reference_voltage = traitlets.Float(default_value=8.2, help="보상의 기준이 되는 완충 전압 (V)")
-    voltage_ema_alpha = traitlets.Float(default_value=0.2, help="전압 EMA 필터 alpha (0.1~0.3 권장, 낮을수록 부드러움)")
+    voltage_ema_alpha = traitlets.Float(default_value=0.1, help="전압 EMA 필터 alpha (낮을수록 부드러움)")
+    gain_min = traitlets.Float(default_value=1.05, help="전압 보상 gain 최소값")
+    gain_max = traitlets.Float(default_value=1.15, help="전압 보상 gain 최대값")
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -71,6 +73,9 @@ class NvidiaRacecar(Racecar):
 
         # 보정 계수 = 기준전압 / 필터링된 전압
         gain = self.reference_voltage / self._filtered_voltage
+        
+        # gain 범위 제한 (급격한 전압 변동 시에도 안정적인 출력)
+        gain = max(self.gain_min, min(self.gain_max, gain))
         return gain
 
     def _read_voltage(self):
@@ -104,7 +109,7 @@ class NvidiaRacecar(Racecar):
                 print("[jetracer][battery] reporter error")
 
             # 이벤트 대기(중단 가능), 기본 10초
-            self._reporter_stop.wait(10)
+            self._reporter_stop.wait(1)
 
     @traitlets.observe("steering")
     def _on_steering(self, change):
