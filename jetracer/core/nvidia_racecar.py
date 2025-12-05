@@ -17,6 +17,9 @@ class NvidiaRacecar(Racecar):
     throttle_offset = traitlets.Float(default_value=0.0, help="ESC 스로틀 오프셋")
     throttle_channel = traitlets.Integer(default_value=0)
     
+    # 모터출력 → 속도 변환계수 (측정값 기반)
+    THROTTLE_TO_MS = 2.2  # 모터출력 1.0 ≈ 2.2 m/s
+    
     # 전압 보상 관련 설정
     voltage_compensation = traitlets.Bool(default_value=True, help="배터리 전압 보상 기능 활성화 여부")
     reference_voltage = traitlets.Float(default_value=8.4, help="보상의 기준이 되는 완충 전압 (V)")
@@ -118,10 +121,11 @@ class NvidiaRacecar(Racecar):
         elif final_throttle < -1.0:
             final_throttle = -1.0
         
-        # 최종 모터 출력값 표시 (값이 변할 때만)
-        rounded = round(final_throttle, 2)
+        # 최종 속도 표시 (값이 변할 때만, m/s 단위)
+        speed_ms = final_throttle * self.THROTTLE_TO_MS
+        rounded = round(speed_ms, 2)
         if rounded != self._last_printed_throttle:
-            print(f"[motor] throttle={final_throttle:+.3f}")
+            print(f"[motor] speed={speed_ms:+.3f} m/s")
             self._last_printed_throttle = rounded
             
         self.throttle_motor.throttle = final_throttle

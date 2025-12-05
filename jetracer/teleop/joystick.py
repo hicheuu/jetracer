@@ -24,7 +24,7 @@ def main():
     ap.add_argument("--deadzone", type=float, default=0.08, help="deadzone for axes")
     ap.add_argument("--throttle-mode", choices=["stick", "trigger"], default="stick", help="stick: -1..1 -> 0..1 매핑 / trigger: 0..1 가정")
     ap.add_argument("--steer-scale", type=float, default=1.0, help="steering scale (0~1)")
-    ap.add_argument("--throttle-scale", type=float, default=0.15, help="throttle scale (0~1)")
+    ap.add_argument("--throttle-scale", type=float, default=0.125, help="throttle scale (0~1), 기본 최대 ~0.45 m/s")
     args = ap.parse_args()
 
     pygame.init()
