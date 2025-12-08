@@ -76,15 +76,15 @@ class NvidiaRacecar(Racecar):
             
             if "steering" in config:
                 steering = config["steering"]
-                kwargs.setdefault("steering_gain", steering.get("gain", self.steering_gain.default_value))
-                kwargs.setdefault("steering_offset", steering.get("offset", self.steering_offset.default_value))
-                kwargs.setdefault("steering_channel", steering.get("channel", self.steering_channel.default_value))
+                kwargs.setdefault("steering_gain", steering.get("gain", NvidiaRacecar.steering_gain.default_value))
+                kwargs.setdefault("steering_offset", steering.get("offset", NvidiaRacecar.steering_offset.default_value))
+                kwargs.setdefault("steering_channel", steering.get("channel", NvidiaRacecar.steering_channel.default_value))
             
             if "throttle" in config:
                 throttle = config["throttle"]
-                kwargs.setdefault("throttle_gain", throttle.get("gain", self.throttle_gain.default_value))
-                kwargs.setdefault("throttle_offset", throttle.get("offset", self.throttle_offset.default_value))
-                kwargs.setdefault("throttle_channel", throttle.get("channel", self.throttle_channel.default_value))
+                kwargs.setdefault("throttle_gain", throttle.get("gain", NvidiaRacecar.throttle_gain.default_value))
+                kwargs.setdefault("throttle_offset", throttle.get("offset", NvidiaRacecar.throttle_offset.default_value))
+                kwargs.setdefault("throttle_channel", throttle.get("channel", NvidiaRacecar.throttle_channel.default_value))
                 # throttle_neutral은 traitlets가 아니므로 인스턴스 변수로 저장
                 self._throttle_neutral = throttle.get("neutral", 0.12)
             else:
@@ -92,11 +92,11 @@ class NvidiaRacecar(Racecar):
             
             if "voltage_compensation" in config:
                 vc = config["voltage_compensation"]
-                kwargs.setdefault("voltage_compensation", vc.get("enabled", self.voltage_compensation.default_value))
-                kwargs.setdefault("reference_voltage", vc.get("reference_voltage", self.reference_voltage.default_value))
-                kwargs.setdefault("voltage_ema_alpha", vc.get("ema_alpha", self.voltage_ema_alpha.default_value))
-                kwargs.setdefault("gain_min", vc.get("gain_min", self.gain_min.default_value))
-                kwargs.setdefault("gain_max", vc.get("gain_max", self.gain_max.default_value))
+                kwargs.setdefault("voltage_compensation", vc.get("enabled", NvidiaRacecar.voltage_compensation.default_value))
+                kwargs.setdefault("reference_voltage", vc.get("reference_voltage", NvidiaRacecar.reference_voltage.default_value))
+                kwargs.setdefault("voltage_ema_alpha", vc.get("ema_alpha", NvidiaRacecar.voltage_ema_alpha.default_value))
+                kwargs.setdefault("gain_min", vc.get("gain_min", NvidiaRacecar.gain_min.default_value))
+                kwargs.setdefault("gain_max", vc.get("gain_max", NvidiaRacecar.gain_max.default_value))
             
             if "input_to_ms" in config:
                 self.INPUT_TO_MS = config["input_to_ms"]
