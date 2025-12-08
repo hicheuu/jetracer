@@ -1,0 +1,5 @@
+# Python 파일은 항상 LF 사용
+*.py text eol=lf
+
+# 기타 텍스트 파일은 자동 감지
+* text=auto

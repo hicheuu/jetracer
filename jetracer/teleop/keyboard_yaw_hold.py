@@ -174,9 +174,9 @@ class YawHoldController:
         self.invert_steering = invert_steering
 
         # imu_madgwick.py의 상수들
-        self.DRIFT_SLOW = 0.005      # 평상시: 0.5%씩 보정
-        self.DRIFT_FAST = 0.5        # 시작/빠른 회전: 50%씩 빠르게 수렴
-        self.FAST_ROTATION_THRESHOLD = 3.0  # 3도/샘플 이상이면 빠른 회전
+        self.DRIFT_SLOW = 0.015      # 평상시: 0.5%씩 보정
+        self.DRIFT_FAST = 0.7        # 시작/빠른 회전: 50%씩 빠르게 수렴
+        self.FAST_ROTATION_THRESHOLD = 2.5  # 3도/샘플 이상이면 빠른 회전
 
         # 상태
         self.target_yaw = None
@@ -210,10 +210,10 @@ class YawHoldController:
         fused_yaw = None
 
         # 자력계 이동평균 필터
-        mag_heading_buf = deque(maxlen=10)
+        mag_heading_buf = deque(maxlen=5)
 
         # 빠른 회전 감지용
-        fast_rotation_cooldown = 200  # 시작 시 200샘플 동안 빠른 수렴
+        fast_rotation_cooldown = 300  # 시작 시 200샘플 동안 빠른 수렴
 
         while self.running:
             try:
