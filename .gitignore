@@ -1,2 +1,29 @@
 *.save
 api-key
+
+# Build artifacts (from 9DOF_Razor_IMU)
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.d
+*.lst
+*.lss
+*.sym
+*.srec
+*.eep
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+
+# Arduino build files
+*.with_bootloader.bin
+*.with_bootloader.hex

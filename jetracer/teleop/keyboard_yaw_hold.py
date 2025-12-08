@@ -91,7 +91,12 @@ import serial
 import serial.tools.list_ports
 
 SERIAL_BAUD = 115200
-CALIBRATION_FILE = os.path.expanduser("~/9DOF_Razor_IMU/Firmware/mag_calibration.json")
+# 캘리브레이션 파일은 sensors 디렉토리에 저장
+CALIBRATION_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), 
+    "sensors", 
+    "mag_calibration.json"
+)
 
 DEFAULT_CALIBRATION = {
     "mx_offset": 0.0,
