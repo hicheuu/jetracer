@@ -538,33 +538,59 @@ def main():
             print("준비되면 Enter를 누르세요...")
             input()
             
-            print("측정 중...")
+            print("측정 중... (실시간으로 Heading 변화를 표시합니다)")
             dmp_samples = []
             mag_samples = []
+            sample_target = 120  # 더 길게 수집해 평균 안정화
+
+            def _bar(angle_deg, width=40):
+                bar_chars = ['░'] * width
+                pos = int(angle_deg / 360 * width) % width
+                bar_chars[pos] = '█'
+                bar_chars[width // 2] = '|'  # 180° 마커
+                return ''.join(bar_chars)
             
-            for _ in range(50):  # 50샘플 평균
+            for idx in range(sample_target):
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
-                if line:
-                    data = parse_imu_data(line)
-                    if data:
-                        # DMP Yaw
-                        qw, qx, qy, qz = data['qw'], data['qx'], data['qy'], data['qz']
-                        dmp_yaw = math.degrees(math.atan2(
-                            2 * (qw * qz + qx * qy),
-                            1 - 2 * (qy * qy + qz * qz)
-                        ))
-                        if dmp_yaw < 0:
-                            dmp_yaw += 360
-                        dmp_samples.append(dmp_yaw)
-                        
-                        # 자력계 Heading
-                        mx = (data['mx'] - cal['mx_offset']) * cal['mx_scale']
-                        my = (data['my'] - cal['my_offset']) * cal['my_scale']
-                        mag_h = math.degrees(math.atan2(my, mx))
-                        if mag_h < 0:
-                            mag_h += 360
-                        mag_samples.append(mag_h)
+                if not line:
+                    continue
+                data = parse_imu_data(line)
+                if not data:
+                    continue
+
+                # DMP Yaw
+                qw, qx, qy, qz = data['qw'], data['qx'], data['qy'], data['qz']
+                dmp_yaw = math.degrees(math.atan2(
+                    2 * (qw * qz + qx * qy),
+                    1 - 2 * (qy * qy + qz * qz)
+                ))
+                if dmp_yaw < 0:
+                    dmp_yaw += 360
+                dmp_samples.append(dmp_yaw)
+
+                # 자력계 Heading
+                mx = (data['mx'] - cal['mx_offset']) * cal['mx_scale']
+                my = (data['my'] - cal['my_offset']) * cal['my_scale']
+                mag_h = math.degrees(math.atan2(my, mx))
+                if mag_h < 0:
+                    mag_h += 360
+                mag_samples.append(mag_h)
+
+                # 실시간 시각화 (DMP와 자력계 평균을 모두 표시)
+                avg_dmp_live = sum(dmp_samples) / len(dmp_samples)
+                avg_mag_live = sum(mag_samples) / len(mag_samples)
+                progress = (idx + 1) / sample_target * 100
+                bar_dmp = _bar(avg_dmp_live)
+                bar_mag = _bar(avg_mag_live)
+                print(
+                    f"\r[{progress:5.1f}%] DMP:{avg_dmp_live:6.2f}° |{bar_dmp}| "
+                    f"MAG:{avg_mag_live:6.2f}° |{bar_mag}| Δ={avg_dmp_live-avg_mag_live:+.2f}°",
+                    end='',
+                    flush=True,
+                )
             
+            print()  # 줄바꿈
+
             if len(dmp_samples) > 10:
                 avg_dmp = sum(dmp_samples) / len(dmp_samples)
                 avg_mag = sum(mag_samples) / len(mag_samples)
