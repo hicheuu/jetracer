@@ -336,15 +336,15 @@ def run_heading(ser, cal):
     fused_yaw = None
     
     # 자력계 이동평균 필터 (노이즈 감소)
-    mag_heading_buf = deque(maxlen=10)  # 10샘플로 줄임
+    mag_heading_buf = deque(maxlen=20)  # 10샘플로 줄임
     
     # Drift 보정 상수
     DRIFT_SLOW = 0.005      # 평상시: 0.5%씩 보정
-    DRIFT_FAST = 0.5        # 시작/빠른 회전: 50%씩 빠르게 수렴!
+    DRIFT_FAST = 0.25        # 시작/빠른 회전: 50%씩 빠르게 수렴!
     FAST_ROTATION_THRESHOLD = 3.0  # 3도/샘플 이상이면 빠른 회전
     
     # 빠른 회전 감지용
-    fast_rotation_cooldown = 200  # 시작 시 200샘플 동안 빠른 수렴!
+    fast_rotation_cooldown = 100  # 시작 시 200샘플 동안 빠른 수렴!
     
     # 자력계-DMP 오프셋 (캘리브레이션에서 로드 또는 자동 계산)
     if cal.get('heading_offset') is not None:
