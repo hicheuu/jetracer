@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import time
+import select
 from collections import deque
 
 # ============================================================
@@ -538,10 +539,11 @@ def main():
             print("준비되면 Enter를 누르세요...")
             input()
             
-            print("측정 중... (실시간으로 Heading 변화를 표시합니다)")
+            print("측정 중... (안정되면 Enter: 종료, q: 취소)")
             dmp_samples = []
             mag_samples = []
-            sample_target = 120  # 더 길게 수집해 평균 안정화
+            min_samples = 60      # 최소 샘플 후 종료 가능
+            max_samples = 600     # 안전 상한
 
             def _bar(angle_deg, width=40):
                 bar_chars = ['░'] * width
@@ -549,8 +551,22 @@ def main():
                 bar_chars[pos] = '█'
                 bar_chars[width // 2] = '|'  # 180° 마커
                 return ''.join(bar_chars)
-            
-            for idx in range(sample_target):
+
+            def _stop_requested():
+                try:
+                    if select.select([sys.stdin], [], [], 0)[0]:
+                        ch = sys.stdin.read(1)
+                        if ch in ['\n', '\r']:
+                            return "enter"
+                        if ch in ['q', 'Q']:
+                            return "quit"
+                except Exception:
+                    return None
+                return None
+
+            cancelled = False
+
+            while True:
                 line = ser.readline().decode('utf-8', errors='ignore').strip()
                 if not line:
                     continue
@@ -579,19 +595,39 @@ def main():
                 # 실시간 시각화 (DMP와 자력계 평균을 모두 표시)
                 avg_dmp_live = sum(dmp_samples) / len(dmp_samples)
                 avg_mag_live = sum(mag_samples) / len(mag_samples)
-                progress = (idx + 1) / sample_target * 100
+                delta_live = avg_dmp_live - avg_mag_live
                 bar_dmp = _bar(avg_dmp_live)
                 bar_mag = _bar(avg_mag_live)
                 print(
-                    f"\r[{progress:5.1f}%] DMP:{avg_dmp_live:6.2f}° |{bar_dmp}| "
-                    f"MAG:{avg_mag_live:6.2f}° |{bar_mag}| Δ={avg_dmp_live-avg_mag_live:+.2f}°",
+                    f"\r[{len(dmp_samples):4d} samples] DMP:{avg_dmp_live:6.2f}° |{bar_dmp}| "
+                    f"MAG:{avg_mag_live:6.2f}° |{bar_mag}| Δ={delta_live:+.2f}° (Enter=stop/q=cancel)",
                     end='',
                     flush=True,
                 )
+
+                # 종료 조건: 충분히 모은 뒤 Enter, 또는 상한 도달
+                if len(dmp_samples) >= min_samples:
+                    stop = _stop_requested()
+                    if stop == "quit":
+                        cancelled = True
+                        print("\n⏹ 사용자 취소")
+                        break
+                    if stop == "enter":
+                        print("\n⏹ 수집 종료 (사용자 입력)")
+                        break
+                elif _stop_requested() == "quit":
+                    cancelled = True
+                    print("\n⏹ 사용자 취소")
+                    break
+                if len(dmp_samples) >= max_samples:
+                    print("\n⏹ 최대 샘플 도달, 자동 종료")
+                    break
             
             print()  # 줄바꿈
 
-            if len(dmp_samples) > 10:
+            if cancelled:
+                print("❌ 저장되지 않았습니다 (사용자 취소)")
+            elif len(dmp_samples) > 10:
                 avg_dmp = sum(dmp_samples) / len(dmp_samples)
                 avg_mag = sum(mag_samples) / len(mag_samples)
                 
