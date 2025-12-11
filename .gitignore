@@ -30,3 +30,4 @@ dist/
 
 # 하드웨어별 설정 파일 (Git에서 추적하지 않음)
 config/nvidia_racecar_config.json
+jetracer/sensors/mag_calibration.json

@@ -467,29 +467,10 @@ def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
 
 
-def _compute_throttle_cmd(throttle_input, throttle_scale=0.125):
-    """
-    Convert logical throttle (-1..1) into ESC command with neutral offset
-    matching joystick.py behavior.
-    """
-    ESC_NEUTRAL = 0.12
-    REVERSE_START = -0.1
-
-    if throttle_input > 0:
-        cmd = ESC_NEUTRAL + throttle_input * (1.0 - ESC_NEUTRAL) * throttle_scale
-    elif throttle_input < 0:
-        cmd = REVERSE_START + throttle_input * (1.0 - abs(REVERSE_START)) * throttle_scale
-    else:
-        cmd = ESC_NEUTRAL
-
-    return clamp(cmd, -1.0, 1.0)
-
-
 def main():
     # 설정
     THROTTLE_STEP = 0.005
-    MAX_THROTTLE_INPUT = 1.0  # logical throttle range
-    THROTTLE_SCALE = 0.125
+    MAX_THROTTLE = 0.2
     YAW_STEP = 15.0
     KP = 0.015  # 감소 (0.02 → 0.015)
     KD = 0.008  # 감소 (0.01 → 0.008)
@@ -524,7 +505,7 @@ def main():
     print("🚗 Keyboard Yaw Hold")
     print("=" * 50)
     print("w/s: throttle ±, a/d: yaw ±, r: reset, c: set target, i: invert, q: quit")
-    print(f"throttle_step={THROTTLE_STEP}, scale={THROTTLE_SCALE}, max_input={MAX_THROTTLE_INPUT}")
+    print(f"throttle_step={THROTTLE_STEP}, max={MAX_THROTTLE}")
     print(f"PD: Kp={KP}, Kd={KD}, deadband={DEADBAND}°, max_error={MAX_ERROR}°")
     print("=" * 50)
 
@@ -544,8 +525,8 @@ def main():
     print("✅ 준비 완료!")
     print("=" * 50)
 
-    throttle_input = 0.0  # logical -1..1
-    car.throttle = _compute_throttle_cmd(throttle_input, THROTTLE_SCALE)
+    throttle = 0.0
+    car.throttle = 0.0
     car.steering = 0.0
 
     try:
@@ -553,15 +534,15 @@ def main():
             key = keyboard.get_key()
 
             if key == 'w':
-                throttle_input = clamp(throttle_input + THROTTLE_STEP, -MAX_THROTTLE_INPUT, MAX_THROTTLE_INPUT)
+                throttle = clamp(throttle + THROTTLE_STEP, 0, MAX_THROTTLE)
             elif key == 's':
-                throttle_input = clamp(throttle_input - THROTTLE_STEP, -MAX_THROTTLE_INPUT, MAX_THROTTLE_INPUT)
+                throttle = clamp(throttle - THROTTLE_STEP, 0, MAX_THROTTLE)
             elif key == 'a':
                 yaw_ctrl.adjust_target_yaw(YAW_STEP)
             elif key == 'd':
                 yaw_ctrl.adjust_target_yaw(-YAW_STEP)
             elif key == 'r':
-                throttle_input = 0.0
+                throttle = 0.0
                 yaw_ctrl.reset_target_yaw()
                 pd.reset()
             elif key == 'c':
@@ -583,22 +564,28 @@ def main():
                 steering = -steering
 
             # 차량 제어
-            car.throttle = _compute_throttle_cmd(throttle_input, THROTTLE_SCALE)
+            if throttle > 0:
+                throttle_cmd = ESC_NEUTRAL + throttle * (1.0 - ESC_NEUTRAL) * THROTTLE_SCALE
+            elif throttle < 0:
+                throttle_cmd = REVERSE_START + throttle * (1.0 - abs(REVERSE_START)) * THROTTLE_SCALE
+            else:
+                throttle_cmd = ESC_NEUTRAL
+
+            # clamp
+            throttle_cmd = max(-1.0, min(1.0, throttle_cmd))
+
+            car.throttle = throttle_cmd
             car.steering = steering
 
             # 로그 (error, yaw만)
-            print(
-                f"\ryaw={yaw:5.1f}° err={error:+5.1f}° thr_in={throttle_input:+.3f} thr_cmd={car.throttle:+.3f}   ",
-                end='',
-                flush=True,
-            )
+            print(f"\ryaw={yaw:5.1f}° err={error:+5.1f}°   ", end='', flush=True)
 
             time.sleep(0.02)
 
     except KeyboardInterrupt:
         print("\n\nCtrl+C")
     finally:
-        car.throttle = _compute_throttle_cmd(0.0, THROTTLE_SCALE)
+        car.throttle = 0.0
         car.steering = 0.0
         yaw_ctrl.stop()
         keyboard.stop()
