@@ -8,5 +8,5 @@ __all__ = [
     'imu_madgwick',
     'imu_fusion_heading',
     'imu_debug',
+    'imu_tilt_compensation',
 ]
-

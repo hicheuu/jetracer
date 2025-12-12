@@ -236,6 +236,7 @@ class YawHoldController:
                 if dmp_yaw < 0:
                     dmp_yaw += 360
 
+
                 # ========================================
                 # 2. 자력계 Heading (drift 보정용)
                 # ========================================
@@ -594,4 +595,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

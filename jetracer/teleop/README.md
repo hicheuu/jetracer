@@ -56,6 +56,18 @@ python -m jetracer.teleop.udp_recv_drive
 
 네트워크를 통해 원격으로 차량을 제어할 때 사용합니다.
 
+### `udp_send_telemetry.py`
+차량 텔레메트리(배터리 %, 차량 번호, Q-yaw)를 UDP로 서버에 전송합니다.
+
+**사용법**
+```bash
+python -m jetracer.teleop.udp_send_telemetry --server-ip <server_ip> --server-port 5560
+```
+
+- 배터리 값은 `battery_monitor.py`가 `/dev/shm/jetracer_voltage`에 기록한 전압을 읽어 SOC%로 변환합니다. (I2C 재접속 없음)
+- Q-yaw는 `jetracer.sensors.imu_tilt_compensation`이 `/dev/shm/jetracer_qyaw`에 기록한 값을 사용합니다.
+- 패킷 포맷: `!Iff` (uint32 car_number, float32 battery_pct, float32 qyaw_deg)
+
 ### `keyboard_teleop.py`
 키보드로 텔레옵 제어 (다양한 키 매핑 지원).
 
@@ -70,4 +82,3 @@ python -m jetracer.teleop.udp_recv_drive
 - 모든 스크립트는 `Ctrl+C`로 안전하게 종료됩니다.
 - 종료 시 스로틀과 스티어링이 자동으로 0으로 리셋됩니다.
 - 실행 시 JetRacer 하드웨어가 연결되어 있어야 합니다.
-
