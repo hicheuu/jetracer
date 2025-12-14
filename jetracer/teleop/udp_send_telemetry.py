@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-UDP telemetry sender for JetRacer.
+UDP telemetry sender for JetRacer (Yaw Delta version).
 
-Sends 3 fields to server:
-1) car number: parsed from username (e.g., jet3 -> 3) or overridden by --car-number
-2) battery percentage: derived from /dev/shm/jetracer_voltage (battery_monitor service)
-3) Q-yaw (heading): read from /dev/shm/jetracer_qyaw (keyboard_yaw_hold)
+Sends to server:
+1) vehicle_id        (int32)
+2) battery voltage   (float32, V)
+3) heading_diff      (float32, rad)
+4) heading_dt        (float32, sec)
+5) heading_seq       (uint32)
 
-Packet format (network byte order): "!Iff"
-  uint32 car_number, float32 battery_pct, float32 qyaw_deg
-
-This script does NOT open I2C or serial devices.
+Yaw is NOT absolute.
+Yaw is Δψ stream written by imu_yaw_delta_writer (30 Hz).
 """
 
 from __future__ import annotations
@@ -23,18 +23,22 @@ import time
 
 from jetracer.teleop.telemetry_common import (
     infer_car_number,
-    read_battery_pct,
-    read_qyaw,
     read_voltage,
+    read_heading_delta,
 )
 
-
-FMT_TELEM = "!Iff"
+# =========================
+# Packet format
+# =========================
+FMT_TELEM = "!ifffI"
 PKT_SIZE_TELEM = struct.calcsize(FMT_TELEM)
 
 
+# =========================
+# CLI
+# =========================
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="UDP telemetry sender (car#, battery%, Q-yaw)")
+    p = argparse.ArgumentParser(description="UDP telemetry sender (yaw delta)")
     p.add_argument(
         "--server-ip",
         default=os.getenv("JETRACER_SERVER_IP"),
@@ -44,9 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--server-port",
         type=int,
         default=int(os.getenv("JETRACER_SERVER_PORT", "5560")),
-        help="telemetry server port (default: 5560, or env JETRACER_SERVER_PORT)",
+        help="telemetry server port (default: 5560)",
     )
-    p.add_argument("--hz", type=float, default=2.0, help="send rate in Hz (default: 2.0)")
+    p.add_argument("--hz", type=float, default=30.0, help="send rate in Hz (default: 2.0)")
     p.add_argument(
         "--car-number",
         type=int,
@@ -59,20 +63,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="battery voltage shm path",
     )
     p.add_argument(
-        "--battery-cells",
-        type=int,
-        default=2,
-        help="battery pack cell count for SOC (default: 2)",
-    )
-    p.add_argument(
-        "--yaw-shm-path",
-        default="/dev/shm/jetracer_qyaw",
-        help="Q-yaw shm path",
+        "--heading-shm-path",
+        default="/dev/shm/jetracer_heading_delta",
+        help="heading delta shm path",
     )
     p.add_argument("--verbose", action="store_true", help="print sent values")
     return p
 
 
+# =========================
+# Main
+# =========================
 def main():
     parser = build_parser()
     args = parser.parse_args()
@@ -80,7 +81,7 @@ def main():
     if not args.server_ip:
         parser.error("--server-ip is required (or set JETRACER_SERVER_IP)")
 
-    car_number = infer_car_number(args.car_number)
+    vehicle_id = infer_car_number(args.car_number)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     target = (args.server_ip, args.server_port)
@@ -89,26 +90,57 @@ def main():
     next_ts = time.monotonic()
 
     if args.verbose:
-        print(f"[telemetry] target={target} fmt={FMT_TELEM} ({PKT_SIZE_TELEM}B) car_number={car_number}")
+        print(
+            f"[telemetry] target={target} fmt={FMT_TELEM} "
+            f"({PKT_SIZE_TELEM}B) vehicle_id={vehicle_id}"
+        )
 
     try:
         while True:
-            bat_pct = read_battery_pct(args.battery_shm_path, args.battery_cells)
-            qyaw = read_qyaw(args.yaw_shm_path)
+            # -------------------------
+            # Read battery voltage
+            # -------------------------
+            voltage = read_voltage(args.battery_shm_path)
+            if voltage is None:
+                voltage = -1.0
 
-            if bat_pct is None:
-                bat_pct = -1.0
-            if qyaw is None:
-                qyaw = -1.0
+            # -------------------------
+            # Read yaw delta
+            # -------------------------
+            heading_diff, heading_dt, heading_seq = read_heading_delta(
+                args.heading_shm_path
+            )
 
-            pkt = struct.pack(FMT_TELEM, int(car_number), float(bat_pct), float(qyaw))
+            if heading_diff is None:
+                heading_diff = 0.0
+                heading_dt = 0.0
+                heading_seq = 0
+
+            # -------------------------
+            # Pack & send
+            # -------------------------
+            pkt = struct.pack(
+                FMT_TELEM,
+                int(vehicle_id),
+                float(voltage),
+                float(heading_diff),
+                float(heading_dt),
+                int(heading_seq),
+            )
             sock.sendto(pkt, target)
 
             if args.verbose:
-                v = read_voltage(args.battery_shm_path)
-                v_disp = v if v is not None else -1.0
-                print(f"[telemetry] car={car_number} bat={bat_pct:.1f}% v={v_disp:.2f} qyaw={qyaw:.1f}")
+                print(
+                    f"[telemetry] car={vehicle_id} "
+                    f"V={voltage:.2f} "
+                    f"dψ={heading_diff:+.5f}rad "
+                    f"dt={heading_dt:.4f}s "
+                    f"seq={heading_seq}"
+                )
 
+            # -------------------------
+            # Rate control
+            # -------------------------
             next_ts += interval
             sleep_for = next_ts - time.monotonic()
             if sleep_for > 0:
@@ -125,4 +157,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
