@@ -96,35 +96,22 @@ def infer_car_number(explicit: Optional[int] = None) -> int:
 
 # SHM binary layout written by imu_yaw_delta_writer.py
 # struct.pack("fffI", heading_diff, heading_dt, reserved, heading_seq)
-_HEADING_FMT = "fffI"
+_HEADING_FMT = "ffI"
 _HEADING_SIZE = struct.calcsize(_HEADING_FMT)
 
-
-def read_heading_delta(
-    shm_path: str = "/dev/shm/jetracer_heading_delta",
-) -> Tuple[Optional[float], Optional[float], Optional[int]]:
-    """
-    Read heading delta information.
-
-    Returns:
-        heading_diff (rad)  : Δψ in [-pi, pi]
-        heading_dt   (sec)  : integration window (≈ 1/30)
-        heading_seq  (uint) : IMU sequence counter
-    """
+def read_heading_delta(shm_path="/dev/shm/jetracer_heading_delta"):
     try:
         with open(shm_path, "rb") as f:
             data = f.read(_HEADING_SIZE)
             if len(data) != _HEADING_SIZE:
                 return None, None, None
 
-            heading_diff, heading_dt, _, heading_seq = struct.unpack(
+            heading_diff, heading_dt, heading_seq = struct.unpack(
                 _HEADING_FMT, data
             )
             return float(heading_diff), float(heading_dt), int(heading_seq)
-
     except Exception:
         return None, None, None
-
 
 # =========================
 # Deprecated (for safety)
