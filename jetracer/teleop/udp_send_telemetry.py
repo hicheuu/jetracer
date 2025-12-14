@@ -86,7 +86,8 @@ def main():
     target = (args.server_ip, args.server_port)
 
     # IMU 시리얼 포트 열기
-    ser = serial.Serial(args.imu_port, args.imu_baud, timeout=0.05)
+    # timeout을 아주 짧게 주거나 0으로 주어 non-blocking에 가깝게 동작하도록 함
+    ser = serial.Serial(args.imu_port, args.imu_baud, timeout=0.01)
     time.sleep(1)
 
     # 최대 전송률 상한(너무 빨리 도는 것 방지)
@@ -110,21 +111,50 @@ def main():
 
     try:
         while True:
-            # IMU 시리얼 데이터 읽기
-            line = ser.readline().decode(errors="ignore").strip()
-            if not (line.startswith("#XYMU=") and line.endswith("#")):
+            # =================================================================
+            # [수정된 부분 Start] Serial Buffer Flushing Strategy
+            # =================================================================
+            # 버퍼에 쌓인 데이터가 있는지 확인
+            if ser.in_waiting > 0:
+                last_valid_line = None
+                
+                # 쌓여있는 모든 라인을 읽어내고, 가장 마지막(최신) 유효 라인만 건짐
+                while ser.in_waiting > 0:
+                    try:
+                        raw = ser.readline()
+                        # 최소한의 바이트 레벨 검증 (디코딩 비용 절약)
+                        # #XYMU=로 시작하는지 체크 (바이트열 기준)
+                        if raw.startswith(b"#XYMU=") and (b"#" in raw): 
+                            last_valid_line = raw
+                    except Exception:
+                        pass
+                
+                if last_valid_line is None:
+                    time.sleep(args.poll_sleep)
+                    continue
+                
+                # 최신 라인 디코딩
+                line = last_valid_line.decode(errors="ignore").strip()
+            
+            else:
+                # 데이터가 없으면 잠시 대기
                 time.sleep(args.poll_sleep)
+                continue
+            # =================================================================
+            # [수정된 부분 End]
+            # =================================================================
+
+            # 엄격한 포맷 검사
+            if not (line.startswith("#XYMU=") and line.endswith("#")):
                 continue
 
             d = line[6:-1].split(",")
             if len(d) < 7:
-                time.sleep(args.poll_sleep)
                 continue
 
             try:
                 qw, qx, qy, qz = map(float, d[3:7])
             except ValueError:
-                time.sleep(args.poll_sleep)
                 continue
 
             q_now = (qw, qx, qy, qz)
@@ -134,30 +164,26 @@ def main():
             if prev_q is None:
                 prev_q = q_now
                 prev_t = now
-                time.sleep(args.poll_sleep)
                 continue
 
             dt = now - prev_t
 
             # dt 방어 + 재동기화
             if dt <= 0.0 or dt > MAX_DT:
+                # 스파이크가 발생했거나 너무 오래된 경우 리셋
                 acc_dyaw = 0.0
                 acc_dt = 0.0
                 prev_q = q_now
                 prev_t = now
-                time.sleep(args.poll_sleep)
                 continue
 
             # quaternion delta 기반 yaw 계산
             dyaw = quat_delta_yaw(prev_q, q_now)
 
-            # 물리 한계 방어
+            # 물리 한계 방어 (노이즈 필터링)
             if abs(dyaw) > MAX_YAW_RATE * dt:
-                acc_dyaw = 0.0
-                acc_dt = 0.0
-                prev_q = q_now
-                prev_t = now
-                time.sleep(args.poll_sleep)
+                # 물리적으로 불가능한 회전 -> 튀는 값으로 간주하고 무시
+                # prev_q는 업데이트하지 않음 (튀는 값은 버림)
                 continue
 
             # 정상 프레임 처리
@@ -176,38 +202,40 @@ def main():
                 # 전송률 상한 체크
                 now_send = time.monotonic()
                 if now_send < next_allowed_send:
-                    time.sleep(min(args.poll_sleep, next_allowed_send - now_send))
-                    continue
-                next_allowed_send = now_send + min_interval
+                    # 너무 빠르면 이번 전송은 스킵하되, 누적값은 리셋해야 함
+                    # (혹은 다음 주기에 합쳐서 보낼 수도 있지만, 여기선 리셋 정책 유지)
+                    pass 
+                else:
+                    next_allowed_send = now_send + min_interval
 
-                # 누적값 리셋
+                    # voltage 읽기
+                    voltage = read_voltage(args.battery_shm_path)
+                    if voltage is None:
+                        voltage = 0.0
+
+                    # 패킷 전송
+                    pkt = struct.pack(
+                        FMT_UPLINK,
+                        int(vehicle_id),
+                        float(voltage),
+                        float(heading_diff),
+                        float(heading_dt),
+                        int(seq),
+                    )
+                    sock.sendto(pkt, target)
+
+                    if args.verbose:
+                        print(
+                            f"[uplink] vid={vehicle_id} "
+                            f"V={voltage:.2f} "
+                            f"dψ={float(heading_diff):+.6f} "
+                            f"dt={float(heading_dt):.4f} "
+                            f"seq={int(seq)}"
+                        )
+                
+                # 누적값 리셋 (전송 여부와 상관없이 윈도우가 찼으면 리셋)
                 acc_dyaw = 0.0
                 acc_dt = 0.0
-
-                # voltage 읽기
-                voltage = read_voltage(args.battery_shm_path)
-                if voltage is None:
-                    voltage = 0.0
-
-                # 패킷 전송
-                pkt = struct.pack(
-                    FMT_UPLINK,
-                    int(vehicle_id),
-                    float(voltage),
-                    float(heading_diff),
-                    float(heading_dt),
-                    int(seq),
-                )
-                sock.sendto(pkt, target)
-
-                if args.verbose:
-                    print(
-                        f"[uplink] vid={vehicle_id} "
-                        f"V={voltage:.2f} "
-                        f"dψ={float(heading_diff):+.6f} "
-                        f"dt={float(heading_dt):.4f} "
-                        f"seq={int(seq)}"
-                    )
 
     except KeyboardInterrupt:
         if args.verbose:
