@@ -5,14 +5,18 @@ import time
 import struct
 import os
 
-PORT = "/dev/ttyIMU"
+PORT = "/dev/ttyACM0"
 BAUD = 115200
 
 TARGET_HZ = 30.0
 WINDOW_DT = 1.0 / TARGET_HZ
 
+# ===== 방어 파라미터 =====
+MAX_YAW_RATE = 6.0     # rad/s (≈340°/s, 매우 보수적)
+MAX_DT = 0.10          # 100 ms 이상은 신뢰 불가
+
 SHM_PATH = "/dev/shm/jetracer_heading_delta"
-FMT = "ffI"  # heading_diff(rad), heading_dt(sec), seq
+FMT = "ffI"            # heading_diff(rad), heading_dt(sec), seq
 SIZE = struct.calcsize(FMT)
 
 
@@ -44,20 +48,22 @@ def main():
     acc_dt = 0.0
     seq = 0
 
-    last_emit = time.monotonic()
-
-    print("[IMU] yaw delta writer (30Hz accumulated) started")
+    print("[IMU] yaw delta writer (30Hz accumulated, guarded) started")
 
     while True:
         line = ser.readline().decode(errors="ignore").strip()
-        if not line.startswith("#XYMU="):
+        if not (line.startswith("#XYMU=") and line.endswith("#")):
             continue
 
-        d = line.split("=")[1].split(",")
+        d = line[6:-1].split(",")   # "#XYMU=" 제거, 끝 "#" 제거
         if len(d) < 7:
             continue
 
-        qw, qx, qy, qz = map(float, d[3:7])
+        try:
+            qw, qx, qy, qz = map(float, d[3:7])
+        except ValueError:
+            continue
+
         yaw = quat_to_yaw(qw, qx, qy, qz)
         now = time.monotonic()
 
@@ -67,28 +73,37 @@ def main():
             continue
 
         dt = now - prev_t
-        if dt <= 0:
-            continue
-
-        dyaw = wrap(yaw - prev_yaw)
-
+        prev_yaw_tmp = prev_yaw  # 디버그용 백업
         prev_yaw = yaw
         prev_t = now
 
-        # 🔵 누적
+        # ===== dt 방어 =====
+        if dt <= 0 or dt > MAX_DT:
+            acc_dyaw = 0.0
+            acc_dt = 0.0
+            continue
+
+        dyaw = wrap(yaw - prev_yaw_tmp)
+
+        # ===== 물리 한계 방어 =====
+        if abs(dyaw) > MAX_YAW_RATE * dt:
+            # 스파이크 → 누적 리셋
+            acc_dyaw = 0.0
+            acc_dt = 0.0
+            continue
+
+        # ===== 누적 =====
         acc_dyaw += dyaw
         acc_dt += dt
 
-        # 🔴 30Hz 윈도우 도달 시에만 write
+        # ===== 30Hz 윈도우 도달 시에만 emit =====
         if acc_dt >= WINDOW_DT:
-            seq += 1
+            seq += 1  # 🔴 여기서만 seq 증가 (중복 방지)
             os.lseek(fd, 0, os.SEEK_SET)
             os.write(fd, struct.pack(FMT, acc_dyaw, acc_dt, seq))
 
-            # 누적 리셋
             acc_dyaw = 0.0
             acc_dt = 0.0
-            last_emit = now
 
 
 if __name__ == "__main__":
