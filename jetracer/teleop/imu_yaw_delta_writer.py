@@ -12,8 +12,8 @@ TARGET_HZ = 30.0
 WINDOW_DT = 1.0 / TARGET_HZ
 
 # ===== 방어 파라미터 =====
-MAX_YAW_RATE = 6.0     # rad/s (≈340°/s, 매우 보수적)
-MAX_DT = 0.10          # 100 ms 이상은 신뢰 불가
+MAX_YAW_RATE = 6.0     # rad/s
+MAX_DT = 0.10          # 100 ms
 
 SHM_PATH = "/dev/shm/jetracer_heading_delta"
 FMT = "ffI"            # heading_diff(rad), heading_dt(sec), seq
@@ -55,7 +55,7 @@ def main():
         if not (line.startswith("#XYMU=") and line.endswith("#")):
             continue
 
-        d = line[6:-1].split(",")   # "#XYMU=" 제거, 끝 "#" 제거
+        d = line[6:-1].split(",")
         if len(d) < 7:
             continue
 
@@ -67,41 +67,45 @@ def main():
         yaw = quat_to_yaw(qw, qx, qy, qz)
         now = time.monotonic()
 
+        # 초기화
         if prev_yaw is None:
             prev_yaw = yaw
             prev_t = now
             continue
 
         dt = now - prev_t
-        prev_yaw_tmp = prev_yaw  # 디버그용 백업
-        prev_yaw = yaw
-        prev_t = now
 
-        # ===== dt 방어 =====
-        if dt <= 0 or dt > MAX_DT:
+        # ===== dt 방어 (여기서 상태 재동기화) =====
+        if dt <= 0.0 or dt > MAX_DT:
             acc_dyaw = 0.0
             acc_dt = 0.0
+            prev_yaw = yaw
+            prev_t = now
             continue
 
-        dyaw = wrap(yaw - prev_yaw_tmp)
+        dyaw = wrap(yaw - prev_yaw)
 
         # ===== 물리 한계 방어 =====
         if abs(dyaw) > MAX_YAW_RATE * dt:
-            # 스파이크 → 누적 리셋
             acc_dyaw = 0.0
             acc_dt = 0.0
+            prev_yaw = yaw
+            prev_t = now
             continue
+
+        # ===== 정상 프레임에서만 상태 갱신 =====
+        prev_yaw = yaw
+        prev_t = now
 
         # ===== 누적 =====
         acc_dyaw += dyaw
         acc_dt += dt
 
-        # ===== 30Hz 윈도우 도달 시에만 emit =====
+        # ===== 30Hz 윈도우 도달 시 emit =====
         if acc_dt >= WINDOW_DT:
-            seq += 1  # 🔴 여기서만 seq 증가 (중복 방지)
+            seq += 1
             os.lseek(fd, 0, os.SEEK_SET)
             os.write(fd, struct.pack(FMT, acc_dyaw, acc_dt, seq))
-
             acc_dyaw = 0.0
             acc_dt = 0.0
 
