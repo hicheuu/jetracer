@@ -5,19 +5,17 @@ import time
 import struct
 import os
 
-PORT = "/dev/ttyACM0"
+PORT = "/dev/ttyIMU"
 BAUD = 115200
-HZ = 30.0
-DT = 1.0 / HZ
 
 SHM_PATH = "/dev/shm/jetracer_heading_delta"
-FMT = "fffI"  # heading_diff, heading_dt, dummy, seq
+FMT = "ffI"  # heading_diff(rad), heading_dt(sec), seq
 SIZE = struct.calcsize(FMT)
 
 
 def quat_to_yaw(qw, qx, qy, qz):
-    siny = 2.0 * (qw*qz + qx*qy)
-    cosy = 1.0 - 2.0 * (qy*qy + qz*qz)
+    siny = 2.0 * (qw * qz + qx * qy)
+    cosy = 1.0 - 2.0 * (qy * qy + qz * qz)
     return math.atan2(siny, cosy)
 
 
@@ -30,42 +28,61 @@ def wrap(a):
 
 
 def main():
-    # timeout 짧게 (블로킹 최소화)
-    ser = serial.Serial(PORT, BAUD, timeout=0.02)
+    ser = serial.Serial(
+        PORT,
+        BAUD,
+        timeout=0,              # 🔴 논블로킹
+        inter_byte_timeout=0
+    )
     time.sleep(1)
 
     fd = os.open(SHM_PATH, os.O_CREAT | os.O_RDWR)
     os.ftruncate(fd, SIZE)
 
     prev_yaw = None
+    prev_t = None
     seq = 0
 
+    print("[IMU] yaw delta writer started")
+
     while True:
-        loop_start = time.monotonic()
+        if not ser.in_waiting:
+            time.sleep(0.001)
+            continue
 
         line = ser.readline().decode(errors="ignore").strip()
-        if line.startswith("#XYMU="):
-            d = line.split("=")[1].split(",")
-            if len(d) >= 7:
-                qw, qx, qy, qz = map(float, d[3:7])
-                yaw = quat_to_yaw(qw, qx, qy, qz)
+        if not line.startswith("#XYMU="):
+            continue
 
-                if prev_yaw is not None:
-                    dyaw = wrap(yaw - prev_yaw)
-                    seq += 1
+        d = line.split("=")[1].split(",")
+        if len(d) < 7:
+            continue
 
-                    os.lseek(fd, 0, os.SEEK_SET)
-                    os.write(fd, struct.pack(FMT, dyaw, DT, 0.0, seq))
+        qw, qx, qy, qz = map(float, d[3:7])
+        yaw = quat_to_yaw(qw, qx, qy, qz)
 
-                prev_yaw = yaw
+        now = time.monotonic()
 
-        # ---- 실시간-safe sleep ----
-        elapsed = time.monotonic() - loop_start
-        sleep_time = DT - elapsed
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-        # sleep_time <= 0 이면 그냥 다음 루프로 (누적 ❌)
+        if prev_yaw is None:
+            prev_yaw = yaw
+            prev_t = now
+            continue
 
+        dt_real = now - prev_t
+        if dt_real <= 0:
+            continue
+
+        dyaw = wrap(yaw - prev_yaw)
+
+        prev_yaw = yaw
+        prev_t = now
+        seq += 1
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, struct.pack(FMT, dyaw, dt_real, seq))
+
+        # 🔍 디버그 (느리면 여기서 바로 보임)
+        # print(f"dyaw={dyaw:+.4f} rad dt={dt_real*1000:.1f} ms")
 
 if __name__ == "__main__":
     main()
