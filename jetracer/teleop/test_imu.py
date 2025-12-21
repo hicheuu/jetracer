@@ -1,43 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-XYMU serial reader (NO ROS) + A/B/C yaw comparison + optional UDP uplink.
-
-Input line example:
-  ... #XYMU=ax,ay,az,qw,qx,qy,qz,gx,gy,gz# ...
-
-Index meaning (0-based) matches your ROS code:
-  [0..2] accel xyz
-  [3..6] quat wxyz
-  [7..9] gyro xyz  (assumed rad/s)
-
-Outputs:
-  A(delta-q)  : delta yaw from dq = conj(q_prev) * q_curr
-  B(abs-yaw)  : yaw from current quaternion
-  C(gyro)     : dpsi = gz*dt, yaw_gyro accumulated
-
-UDP payload (default):
-  struct "!ffI" => (dpsi, dt, seq)
-"""
-
 import argparse
 import math
 import re
 import signal
 import socket
 import struct
-import sys
 import time
+from collections import deque
+from statistics import median
 
 import serial
 
 
-# ----------------------------
-# Math helpers
-# ----------------------------
+XYMU_RE = re.compile(r"#\s*XYMU\s*=\s*([^#]+)#")
+
+STOP = False
+
+
+def on_sig(signum, frame):
+    global STOP
+    STOP = True
+
+
 def wrap_pi(x: float) -> float:
-    # [-pi, pi)
     while x >= math.pi:
         x -= 2.0 * math.pi
     while x < -math.pi:
@@ -62,28 +49,17 @@ def quat_mul(q1, q2):
 
 
 def yaw_from_quat_wxyz(q):
-    # yaw (Z-axis rotation) from quaternion (w,x,y,z)
     w, x, y, z = q
     siny = 2.0 * (w * z + x * y)
     cosy = 1.0 - 2.0 * (y * y + z * z)
     return math.atan2(siny, cosy)
 
 
-# ----------------------------
-# XYMU parsing
-# ----------------------------
-XYMU_RE = re.compile(r"#\s*XYMU\s*=\s*([^#]+)#")
-
-
 def parse_xymu(line_bytes):
-    """
-    Return list of 10 floats or None
-    """
     if not line_bytes:
         return None
-
     try:
-        s = line_bytes.decode("utf-8", "ignore") if isinstance(line_bytes, (bytes, bytearray)) else str(line_bytes)
+        s = line_bytes.decode("utf-8", "ignore")
     except Exception:
         s = str(line_bytes)
 
@@ -97,66 +73,49 @@ def parse_xymu(line_bytes):
         return None
 
     try:
-        vals = [float(parts[i]) for i in range(10)]
-        return vals
+        return [float(parts[i]) for i in range(10)]
     except Exception:
         return None
 
 
-# ----------------------------
-# Main
-# ----------------------------
 def build_parser():
-    p = argparse.ArgumentParser(description="XYMU IMU uplink (NO ROS)")
+    p = argparse.ArgumentParser(description="XYMU reader (NO ROS) v2: dt-stable + deltaq order select")
 
-    p.add_argument("--port", default="/dev/ttyACM0", help="Serial port (e.g., /dev/ttyACM0)")
-    p.add_argument("--baud", type=int, default=115200, help="Serial baudrate")
-    p.add_argument("--flush", type=int, default=30, help="Flush first N lines after open")
-    p.add_argument("--timeout", type=float, default=1.0, help="Serial read timeout (sec)")
+    p.add_argument("--port", default="/dev/ttyACM1")
+    p.add_argument("--baud", type=int, default=115200)
+    p.add_argument("--timeout", type=float, default=1.0)
+    p.add_argument("--flush", type=int, default=30)
 
-    p.add_argument("--target-hz", type=float, default=30.0, help="Only used for log expectation; loop is driven by serial")
-    p.add_argument("--max-dt", type=float, default=0.10, help="Skip sample if dt > max-dt (sec)")
-    p.add_argument("--max-yaw-rate", type=float, default=6.0, help="Clamp/skip if |gz| > max-yaw-rate (rad/s)")
+    p.add_argument("--max-dt", type=float, default=0.20, help="Skip if dt_obs > max-dt (sec)")
+    p.add_argument("--dt-window", type=int, default=51, help="Median dt window size (odd recommended)")
+    p.add_argument("--min-dt", type=float, default=0.002, help="Ignore dt_obs smaller than this (sec)")
 
-    p.add_argument("--invert-gz", action="store_true", help="Invert gyro z sign")
-    p.add_argument("--invert-quat-yaw", action="store_true", help="Invert quaternion-derived yaw sign")
+    p.add_argument("--gyro-unit", choices=["rad", "deg"], default="rad", help="Unit of gx/gy/gz")
+    p.add_argument("--max-yaw-rate", type=float, default=12.0, help="rad/s after conversion")
 
-    # UDP
-    p.add_argument("--udp-ip", default="", help="If set, send UDP packets")
-    p.add_argument("--udp-port", type=int, default=0, help="UDP port")
-    p.add_argument("--send-mode", choices=["gyro", "deltaq"], default="gyro",
-                   help="Which dpsi to send via UDP")
-    p.add_argument("--udp-fmt", choices=["ffI", "ffffI"], default="ffI",
-                   help="Payload format: ffI=(dpsi,dt,seq), ffffI=(dpsi,dt,yaw_gyro,yaw_abs,seq)")
+    p.add_argument("--print-every", type=int, default=1)
 
-    # Logging
-    p.add_argument("--print-every", type=int, default=1, help="Print every N samples (1 = print all)")
+    # UDP (optional)
+    p.add_argument("--udp-ip", default="")
+    p.add_argument("--udp-port", type=int, default=0)
+    p.add_argument("--send-mode", choices=["gyro", "deltaq"], default="gyro")
+    p.add_argument("--udp-fmt", choices=["ffI", "ffffI"], default="ffI")
+
     return p
 
 
-STOP = False
-
-
-def on_sigint(signum, frame):
-    global STOP
-    STOP = True
-
-
 def main():
-    global STOP
     args = build_parser().parse_args()
 
-    signal.signal(signal.SIGINT, on_sigint)
-    signal.signal(signal.SIGTERM, on_sigint)
+    signal.signal(signal.SIGINT, on_sig)
+    signal.signal(signal.SIGTERM, on_sig)
 
-    # UDP socket (optional)
     sock = None
     dst = None
     if args.udp_ip and args.udp_port > 0:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         dst = (args.udp_ip, args.udp_port)
 
-    # Open serial
     print(f"[INFO] Opening serial: {args.port} @ {args.baud}")
     print("[INFO] Waiting 3 seconds for IMU boot...")
     time.sleep(3.0)
@@ -164,10 +123,9 @@ def main():
     try:
         ser = serial.Serial(port=args.port, baudrate=args.baud, timeout=args.timeout)
     except Exception as e:
-        print(f"[ERROR] Failed to open serial {args.port}: {e}")
+        print(f"[ERROR] open serial failed: {e}")
         return 1
 
-    # Flush
     print(f"[INFO] Flushing first {args.flush} lines...")
     for _ in range(max(0, args.flush)):
         try:
@@ -175,7 +133,7 @@ def main():
         except Exception:
             pass
 
-    # State
+    # state
     prev_t = None
     prev_q = None
     prev_yaw_abs = None
@@ -183,12 +141,13 @@ def main():
     yaw_gyro = 0.0
     seq = 0
 
-    # Stats
-    total = used = skip_dt = skip_rate = skip_parse = 0
-    stat_every = 72  # roughly 30 Hz -> ~2.4 sec
+    dt_hist = deque(maxlen=max(5, args.dt_window))
+    dt_est = None  # median(dt_hist)
+
+    total = used = skip_parse = skip_dt = skip_rate = 0
 
     print("[INFO] Running... Ctrl+C to stop.")
-    print("[INFO] Columns: A(delta-q) | B(abs-yaw) | C(gyro dpsi, yaw_gyro) | dt")
+    print("[INFO] Columns: A(delta-q) | B(abs-yaw) | C(gyro) | dt_obs/dt_est | gz")
 
     while not STOP:
         line = ser.readline()
@@ -199,90 +158,101 @@ def main():
             skip_parse += 1
             continue
 
-        # Extract
         ax, ay, az = raw[0], raw[1], raw[2]
         qw, qx, qy, qz = raw[3], raw[4], raw[5], raw[6]
         gx, gy, gz = raw[7], raw[8], raw[9]
 
-        if args.invert_gz:
-            gz = -gz
-
-        # dt
-        now = time.time()
+        # time
+        now = time.monotonic()
         if prev_t is None:
             prev_t = now
-            # 첫 프레임은 기준만 잡고 넘어감
+            prev_q = (qw, qx, qy, qz)
+            prev_yaw_abs = yaw_from_quat_wxyz(prev_q)
             continue
 
-        dt = now - prev_t
+        dt_obs = now - prev_t
         prev_t = now
 
-        if dt <= 0.0 or dt > args.max_dt:
+        if dt_obs > args.max_dt:
             skip_dt += 1
             continue
+        if dt_obs >= args.min_dt:
+            dt_hist.append(dt_obs)
+        if len(dt_hist) >= 5:
+            dt_est = median(dt_hist)
+        else:
+            dt_est = dt_obs
+
+        # gyro unit -> rad/s
+        if args.gyro_unit == "deg":
+            gz_rad = gz * (math.pi / 180.0)
+        else:
+            gz_rad = gz
+
+        if abs(gz_rad) > args.max_yaw_rate:
+            skip_rate += 1
+            gz_rad_use = 0.0
+        else:
+            gz_rad_use = gz_rad
 
         # quaternion
         q = (qw, qx, qy, qz)
-
-        # B: abs yaw from quaternion
         yaw_abs = yaw_from_quat_wxyz(q)
-        if args.invert_quat_yaw:
-            yaw_abs = -yaw_abs
 
-        # A: delta-q yaw
-        dpsi_deltaq = 0.0
+        dAbs = 0.0 if prev_yaw_abs is None else wrap_pi(yaw_abs - prev_yaw_abs)
+        prev_yaw_abs = yaw_abs
+
+        # delta-q: try both orders
+        dpsi_a = 0.0
+        dpsi_b = 0.0
         if prev_q is not None:
-            dq = quat_mul(quat_conj(prev_q), q)
-            dpsi_deltaq = wrap_pi(yaw_from_quat_wxyz(dq))
-            if args.invert_quat_yaw:
-                dpsi_deltaq = -dpsi_deltaq
+            dq_a = quat_mul(quat_conj(prev_q), q)  # prev^{-1} * curr
+            dq_b = quat_mul(q, quat_conj(prev_q))  # curr * prev^{-1}
+            dpsi_a = wrap_pi(yaw_from_quat_wxyz(dq_a))
+            dpsi_b = wrap_pi(yaw_from_quat_wxyz(dq_b))
+
+        # choose delta-q that best matches dAbs (when dAbs is meaningful)
+        if abs(dAbs) > 1e-4:
+            err_a = abs(wrap_pi(dpsi_a - dAbs))
+            err_b = abs(wrap_pi(dpsi_b - dAbs))
+            dpsi_deltaq = dpsi_a if err_a <= err_b else dpsi_b
+        else:
+            # when abs yaw didn't change, keep small one (usually 0)
+            dpsi_deltaq = dpsi_a if abs(dpsi_a) <= abs(dpsi_b) else dpsi_b
+
         prev_q = q
 
-        # C: gyro integration
-        # spike guard
-        if abs(gz) > args.max_yaw_rate:
-            skip_rate += 1
-            dpsi_gyro = 0.0
-        else:
-            dpsi_gyro = gz * dt
-            yaw_gyro = wrap_pi(yaw_gyro + dpsi_gyro)
-
-        # Also (optional) delta from abs yaw
-        if prev_yaw_abs is None:
-            dpsi_abs = 0.0
-        else:
-            dpsi_abs = wrap_pi(yaw_abs - prev_yaw_abs)
-        prev_yaw_abs = yaw_abs
+        # gyro integration using dt_est (stable)
+        dpsi_gyro = gz_rad_use * dt_est
+        yaw_gyro = wrap_pi(yaw_gyro + dpsi_gyro)
 
         used += 1
         seq += 1
 
-        # Print
         if args.print_every > 0 and (seq % args.print_every == 0):
+            hz_est = (1.0 / dt_est) if dt_est and dt_est > 0 else 0.0
             print(
                 f"A(delta-q)={dpsi_deltaq:+.4f} rad | "
-                f"B(abs-yaw)={yaw_abs:+.4f} rad (dAbs={dpsi_abs:+.4f}) | "
+                f"B(abs-yaw)={yaw_abs:+.4f} rad (dAbs={dAbs:+.4f}) | "
                 f"C(gyro dpsi)={dpsi_gyro:+.4f} rad yaw_gyro={yaw_gyro:+.4f} | "
-                f"dt={dt:.4f}"
+                f"dt_obs={dt_obs:.4f} dt_est={dt_est:.4f} (~{hz_est:.1f}Hz) | "
+                f"gz={gz_rad_use:+.4f} rad/s"
             )
 
         # UDP send
         if sock is not None:
             dpsi_send = dpsi_gyro if args.send_mode == "gyro" else dpsi_deltaq
-
             if args.udp_fmt == "ffI":
-                pkt = struct.pack("!ffI", float(dpsi_send), float(dt), int(seq))
+                pkt = struct.pack("!ffI", float(dpsi_send), float(dt_est), int(seq))
             else:
-                pkt = struct.pack("!ffffI", float(dpsi_send), float(dt), float(yaw_gyro), float(yaw_abs), int(seq))
-
+                pkt = struct.pack("!ffffI", float(dpsi_send), float(dt_est), float(yaw_gyro), float(yaw_abs), int(seq))
             try:
                 sock.sendto(pkt, dst)
             except Exception as e:
                 print(f"[WARN] UDP send failed: {e}")
 
-        # Periodic stats
-        if used > 0 and (used % stat_every == 0):
-            print(f"[STAT] total={total} used={used} skip_dt={skip_dt} skip_rate={skip_rate} skip_parse={skip_parse}")
+        if used > 0 and (used % 200 == 0):
+            print(f"[STAT] total={total} used={used} skip_parse={skip_parse} skip_dt={skip_dt} skip_rate={skip_rate}")
 
     print("\n[INFO] Exiting...")
     try:
