@@ -75,7 +75,8 @@ def main():
             # 2. 패킹 (float 1개 = 4바이트)
             # 서버에서 C언어 구조체나 Python struct.unpack('f')로 풀면 됨
             packet = struct.pack('f', current_gyro_z)
-            
+
+            print(f"[Main] Gyro Z 데이터 전송: {current_gyro_z}")
             # 3. 전송
             sock.sendto(packet, (SERVER_IP, SERVER_PORT))
             
