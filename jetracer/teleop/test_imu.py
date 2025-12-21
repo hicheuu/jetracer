@@ -13,15 +13,19 @@ from jetracer.teleop.telemetry_common import (
     read_voltage,
 )
 
+# =============================
+# Config
+# =============================
 FMT_UPLINK = "!ifffI"
-PKT_SIZE = struct.calcsize(FMT_UPLINK)
-
 TARGET_HZ = 30.0
 WINDOW_DT = 1.0 / TARGET_HZ
 
 MAX_YAW_RATE = 6.0
-MAX_DT = 0.05  # dt 방어 기준
+MAX_DT = 0.05
 
+# =============================
+# Quaternion utils
+# =============================
 def quat_conj(q):
     w, x, y, z = q
     return (w, -x, -y, -z)
@@ -43,6 +47,24 @@ def quat_delta_yaw(q_prev, q_now):
     cosy = 1.0 - 2.0 * (qy*qy + qz*qz)
     return math.atan2(siny, cosy)
 
+# --- absolute yaw ---
+def quat_to_yaw(q):
+    qw, qx, qy, qz = q
+    return math.atan2(
+        2.0 * (qw*qz + qx*qy),
+        1.0 - 2.0 * (qy*qy + qz*qz)
+    )
+
+def unwrap(d):
+    while d > math.pi:
+        d -= 2*math.pi
+    while d < -math.pi:
+        d += 2*math.pi
+    return d
+
+# =============================
+# Args
+# =============================
 def build_parser():
     p = argparse.ArgumentParser()
     p.add_argument("--server-ip", required=True)
@@ -50,12 +72,15 @@ def build_parser():
     p.add_argument("--hz", type=float, default=60.0)
     p.add_argument("--car-number", type=int, default=None)
     p.add_argument("--battery-shm-path", default="/dev/shm/jetracer_voltage")
-    p.add_argument("--imu-port", default="/dev/ttyACM0")
+    p.add_argument("--imu-port", default="/dev/ttyACM1")
     p.add_argument("--imu-baud", type=int, default=115200)
     p.add_argument("--poll-sleep", type=float, default=0.0001)
     p.add_argument("--verbose", action="store_true")
     return p
 
+# =============================
+# Main
+# =============================
 def main():
     args = build_parser().parse_args()
     vehicle_id = infer_car_number(args.car_number)
@@ -71,59 +96,54 @@ def main():
 
     prev_q = None
     prev_t = None
-    acc_dyaw = 0.0
+    prev_yaw = None
+
+    acc_dyaw_A = 0.0   # A: delta quaternion yaw
+    acc_dyaw_B = 0.0   # B: absolute yaw + unwrap
     acc_dt = 0.0
     seq = 0
 
     serial_buffer = b""
 
-    # ===============================
-    # A) 디버깅 / 계측 카운터
-    # ===============================
-    cnt_total = 0
-    cnt_used = 0
-    cnt_skip_dt = 0
-    cnt_skip_rate = 0
-    cnt_skip_parse = 0
+    # ---- stats ----
+    cnt_total = cnt_used = cnt_skip_dt = cnt_skip_rate = cnt_skip_parse = 0
     last_report_t = time.monotonic()
 
-    if args.verbose:
-        print("[uplink] started. raw-parsing + stats mode.")
+    print("[uplink] A/B comparison mode started")
 
     try:
         while True:
-            try:
-                waiting = ser.in_waiting
-                if waiting > 0:
-                    serial_buffer += ser.read(waiting)
-                else:
-                    time.sleep(args.poll_sleep)
-                    continue
-
-                if b'\n' not in serial_buffer:
-                    continue
-
-                parts = serial_buffer.split(b'\n')
-                serial_buffer = parts[-1]
-
-                valid_line = None
-                for raw in reversed(parts[:-1]):
-                    r = raw.strip()
-                    if r.startswith(b"#XYMU=") and r.endswith(b"#"):
-                        valid_line = r
-                        break
-
-                if not valid_line:
-                    continue
-
-                line = valid_line.decode(errors="ignore").strip()
-
-            except Exception:
+            # =============================
+            # Serial non-blocking parse
+            # =============================
+            waiting = ser.in_waiting
+            if waiting > 0:
+                serial_buffer += ser.read(waiting)
+            else:
+                time.sleep(args.poll_sleep)
                 continue
 
-            # ===============================
-            # 파싱
-            # ===============================
+            if b"\n" not in serial_buffer:
+                continue
+
+            parts = serial_buffer.split(b"\n")
+            serial_buffer = parts[-1]
+
+            valid = None
+            for raw in reversed(parts[:-1]):
+                r = raw.strip()
+                if r.startswith(b"#XYMU=") and r.endswith(b"#"):
+                    valid = r
+                    break
+
+            if not valid:
+                continue
+
+            line = valid.decode(errors="ignore").strip()
+
+            # =============================
+            # Parse
+            # =============================
             d = line[6:-1].split(",")
             if len(d) < 7:
                 cnt_skip_parse += 1
@@ -136,43 +156,50 @@ def main():
                 continue
 
             cnt_total += 1
-
             q_now = (qw, qx, qy, qz)
             now = time.monotonic()
 
             if prev_q is None:
                 prev_q = q_now
                 prev_t = now
+                prev_yaw = quat_to_yaw(q_now)
                 continue
 
             dt = now - prev_t
-
-            # ===============================
-            # dt 스킵
-            # ===============================
             if dt <= 0.0 or dt > MAX_DT:
                 cnt_skip_dt += 1
                 prev_q = q_now
                 prev_t = now
+                prev_yaw = quat_to_yaw(q_now)
                 continue
 
-            dyaw = quat_delta_yaw(prev_q, q_now)
+            # =============================
+            # A: delta quaternion yaw
+            # =============================
+            dyaw_A = quat_delta_yaw(prev_q, q_now)
 
-            # ===============================
-            # yaw-rate 스킵
-            # ===============================
-            if abs(dyaw) > MAX_YAW_RATE * dt:
+            if abs(dyaw_A) > MAX_YAW_RATE * dt:
                 cnt_skip_rate += 1
                 continue
 
-            cnt_used += 1
+            # =============================
+            # B: absolute yaw + unwrap
+            # =============================
+            yaw_now = quat_to_yaw(q_now)
+            dyaw_B = unwrap(yaw_now - prev_yaw)
 
+            cnt_used += 1
             prev_q = q_now
             prev_t = now
+            prev_yaw = yaw_now
 
-            acc_dyaw += dyaw
+            acc_dyaw_A += dyaw_A
+            acc_dyaw_B += dyaw_B
             acc_dt += dt
 
+            # =============================
+            # Window send
+            # =============================
             if acc_dt >= WINDOW_DT:
                 seq += 1
 
@@ -185,31 +212,34 @@ def main():
                         FMT_UPLINK,
                         int(vehicle_id),
                         float(voltage),
-                        float(acc_dyaw),
+                        float(acc_dyaw_A),  # 기존 A 방식 그대로 UDP 송신
                         float(acc_dt),
                         int(seq),
                     )
                     sock.sendto(pkt, target)
 
-                    if args.verbose:
-                        print(f"UDP send: dψ={acc_dyaw:+.4f} dt={acc_dt:.4f}")
+                    # ---- 비교 로그 ----
+                    print(
+                        f"A(delta-q)={acc_dyaw_A:+.4f} rad | "
+                        f"B(abs-yaw)={acc_dyaw_B:+.4f} rad | "
+                        f"dt={acc_dt:.4f}"
+                    )
 
-                acc_dyaw = 0.0
+                acc_dyaw_A = 0.0
+                acc_dyaw_B = 0.0
                 acc_dt = 0.0
 
-            # ===============================
-            # 1초마다 통계 출력
-            # ===============================
-            now_r = time.monotonic()
-            if now_r - last_report_t >= 1.0:
+            # =============================
+            # 1s stats
+            # =============================
+            t = time.monotonic()
+            if t - last_report_t >= 1.0:
                 print(
-                    f"[IMU STAT] total={cnt_total} "
-                    f"used={cnt_used} "
-                    f"skip_dt={cnt_skip_dt} "
-                    f"skip_rate={cnt_skip_rate} "
+                    f"[STAT] total={cnt_total} used={cnt_used} "
+                    f"skip_dt={cnt_skip_dt} skip_rate={cnt_skip_rate} "
                     f"skip_parse={cnt_skip_parse}"
                 )
-                last_report_t = now_r
+                last_report_t = t
 
     except KeyboardInterrupt:
         pass
