@@ -77,9 +77,13 @@ class NvidiaRacecar(Racecar):
             
             if "steering" in config:
                 steering = config["steering"]
-                kwargs.setdefault("steering_gain", steering.get("gain", NvidiaRacecar.steering_gain.default_value))
-                kwargs.setdefault("steering_offset", steering.get("offset", NvidiaRacecar.steering_offset.default_value))
-                kwargs.setdefault("steering_channel", steering.get("channel", NvidiaRacecar.steering_channel.default_value))
+                # config 파일의 값이 있으면 우선 적용 (kwargs에 이미 값이 있어도 덮어씀)
+                if "gain" in steering:
+                    kwargs["steering_gain"] = steering["gain"]
+                if "offset" in steering:
+                    kwargs["steering_offset"] = steering["offset"]
+                if "channel" in steering:
+                    kwargs["steering_channel"] = steering["channel"]
             
             if "throttle" in config:
                 throttle = config["throttle"]
