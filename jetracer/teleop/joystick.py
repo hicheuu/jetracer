@@ -84,7 +84,7 @@ def main():
 
             print(
                 f"steer_axis[{args.steer_axis}]={steer_raw:+.2f} -> {steering_cmd:+.2f} | "
-                f"thr_axis[{args.throttle_axis}]={thr_raw:+.2f} -> {throttle_cmd:.2f}"
+                f"thr_axis[{args.throttle_axis}]={thr_raw:+.4f} -> {throttle_cmd:.4f}"
             )
             time.sleep(0.03)
 

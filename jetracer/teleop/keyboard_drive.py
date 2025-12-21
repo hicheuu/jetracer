@@ -53,9 +53,9 @@ def _compute_throttle_cmd(throttle_input, throttle_scale=0.125):
     return clamp(cmd, -1.0, 1.0)
 
 
-def main(throttle_step=0.05, steering_step=0.05, throttle_scale=0.125):
+def main(throttle_step=0.001, steering_step=0.05, throttle_scale=0.165):
     car = NvidiaRacecar()
-    throttle_input = 0.0  # logical -1..1
+    throttle_input = 0.2  # logical -1..1
     steering = 0.0
     car.throttle = _compute_throttle_cmd(throttle_input, throttle_scale)
     car.steering = steering
@@ -86,7 +86,7 @@ def main(throttle_step=0.05, steering_step=0.05, throttle_scale=0.125):
 
             car.throttle = _compute_throttle_cmd(throttle_input, throttle_scale)
             car.steering = steering
-            print(f"throttle_in={throttle_input:.2f} throttle_cmd={car.throttle:.2f} steering={steering:.2f}")
+            print(f"throttle_in={throttle_input:.4f} throttle_cmd={car.throttle:.4f} steering={steering:.2f}")
     except KeyboardInterrupt:
         print("Ctrl+C pressed, stopping")
     finally:

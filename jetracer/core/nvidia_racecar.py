@@ -1,3 +1,4 @@
+
 import threading
 import traitlets
 from adafruit_servokit import ServoKit
@@ -128,9 +129,9 @@ class NvidiaRacecar(Racecar):
         # 현재 전압 파일을 읽어 전압 보상을 적용합니다 (충돌 방지 및 성능 향상).
 
         # 전압 상태를 10초마다 출력하는 리포터 스레드 시작
-        self._reporter_stop = threading.Event()
-        self._reporter_thread = threading.Thread(target=self._voltage_reporter, daemon=True)
-        self._reporter_thread.start()
+       # self._reporter_stop = threading.Event()
+       # self._reporter_thread = threading.Thread(target=self._voltage_reporter, daemon=True)
+       # self._reporter_thread.start()
 
     def _get_voltage_gain(self):
         """파일에서 현재 배터리 전압을 읽어 보정 계수를 계산합니다."""

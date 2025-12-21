@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
 UDP receiver -> JetRacer driver
-자이카 udp_recv.py의 수신 방식을 참고하여 개선된 버전
+송신부(simple_udp_ackermann_sender.py)의 float 속도 모드까지 지원:
+- angle(float), speed(float), seq(uint32)  (최우선)
+- angle(float), speed(int),   seq(uint32)
+- angle(int),   speed(int),   seq(uint32)  (기존 int 포맷)
 """
 import argparse
 import math
@@ -25,16 +28,18 @@ CONFIG = {
     "angle_invert": False,      # 스티어링 반전
     "steer_scale": 1.0,         # 수신값 → 정규화 스케일 (수신값이 이미 -1~1이면 1.0)
     # 스로틀 설정
-    "speed_scale": 0.65,        # speed_i → throttle 변환 (speed_i * scale)
+    "speed_scale": 0.0357,        # speed(정수/실수) → throttle 변환 (speed * scale)
     "speed_max": 0.2,           # 최대 스로틀 값
 }
 # ==============================
 
-# 패킷 포맷 (udp_recv.py와 동일)
-FMT_INT = "!iiI"      # int32 angle_i, int32 speed_i, uint32 seq
-FMT_FLOAT = "!fiI"    # float angle_rad, int32 speed_i, uint32 seq
+# 패킷 포맷
+FMT_INT = "!iiI"           # int angle, int speed, uint32 seq
+FMT_FLOAT_INT = "!fiI"     # float angle(rad), int speed, uint32 seq
+FMT_FLOAT_FLOAT = "!ffI"   # float angle(rad), float speed, uint32 seq
 PKT_SIZE_INT = struct.calcsize(FMT_INT)
-PKT_SIZE_FLOAT = struct.calcsize(FMT_FLOAT)
+PKT_SIZE_FLOAT_INT = struct.calcsize(FMT_FLOAT_INT)
+PKT_SIZE_FLOAT_FLOAT = struct.calcsize(FMT_FLOAT_FLOAT)
 
 
 def clamp(x: float, lo: float = -1.0, hi: float = 1.0) -> float:
@@ -45,82 +50,66 @@ def is_finite(x) -> bool:
     return (x is not None) and (not math.isnan(x)) and (not math.isinf(x))
 
 
-def decode_packet(data: bytes, fmt_mode: str, angle_scale: float) -> Optional[Tuple[str, float, int, int]]:
+def decode_packet(data: bytes, fmt_mode: str, angle_scale: float) -> Optional[Tuple[str, float, float, int]]:
     """
     패킷 디코딩
-    Returns: (fmt, steer_rad, speed_i, seq) or None
+    Returns: (fmt_label, steer_rad, speed_f, seq) or None
+    fmt_label: 'float_float' | 'float_int' | 'int'
     """
-    if fmt_mode == "auto":
-        # FLOAT 포맷 우선 시도
-        if len(data) >= PKT_SIZE_FLOAT:
+    # 먼저 float-float 시도 (송신부 send_speed_as_float=True)
+    if fmt_mode in ("auto", "float"):
+        if len(data) >= PKT_SIZE_FLOAT_FLOAT:
             try:
-                angle_f, speed_i, seq = struct.unpack(FMT_FLOAT, data[:PKT_SIZE_FLOAT])
+                angle_f, speed_f, seq = struct.unpack(FMT_FLOAT_FLOAT, data[:PKT_SIZE_FLOAT_FLOAT])
+                if is_finite(angle_f) and is_finite(speed_f):
+                    return ("float_float", float(angle_f), float(speed_f), int(seq))
+            except struct.error:
+                pass
+        if len(data) >= PKT_SIZE_FLOAT_INT:
+            try:
+                angle_f, speed_i, seq = struct.unpack(FMT_FLOAT_INT, data[:PKT_SIZE_FLOAT_INT])
                 if is_finite(angle_f):
-                    return ("float", float(angle_f), int(speed_i), int(seq))
+                    return ("float_int", float(angle_f), float(speed_i), int(seq))
             except struct.error:
                 pass
-        # INT 포맷 시도
-        if len(data) >= PKT_SIZE_INT:
-            try:
-                angle_i, speed_i, seq = struct.unpack(FMT_INT, data[:PKT_SIZE_INT])
-                steer_rad = float(angle_i) / max(1e-6, angle_scale)
-                return ("int", float(steer_rad), int(speed_i), int(seq))
-            except struct.error:
-                pass
-        return None
+        if fmt_mode == "float":
+            return None  # float 모드 강제일 때 여기서 끝
 
-    elif fmt_mode == "float":
-        if len(data) < PKT_SIZE_FLOAT:
-            return None
-        angle_f, speed_i, seq = struct.unpack(FMT_FLOAT, data[:PKT_SIZE_FLOAT])
-        return ("float", float(angle_f), int(speed_i), int(seq))
+    # int 포맷
+    if len(data) >= PKT_SIZE_INT:
+        try:
+            angle_i, speed_i, seq = struct.unpack(FMT_INT, data[:PKT_SIZE_INT])
+            steer_rad = float(angle_i) / max(1e-6, angle_scale)
+            return ("int", steer_rad, float(speed_i), int(seq))
+        except struct.error:
+            pass
 
-    else:  # int
-        if len(data) < PKT_SIZE_INT:
-            return None
-        angle_i, speed_i, seq = struct.unpack(FMT_INT, data[:PKT_SIZE_INT])
-        steer_rad = float(angle_i) / max(1e-6, angle_scale)
-        return ("int", float(steer_rad), int(speed_i), int(seq))
+    return None
 
 
 def build_parser():
-    p = argparse.ArgumentParser(
-        description="UDP receiver -> JetRacer driver (자이카 호환 포맷)"
-    )
+    p = argparse.ArgumentParser(description="UDP receiver -> JetRacer driver (자이카 호환 포맷 + float 속도)")
     # 네트워크
-    p.add_argument("--bind-ip", default=CONFIG["bind_ip"], 
-                   help=f"수신 바인드 IP (기본: {CONFIG['bind_ip']})")
-    p.add_argument("--port", type=int, default=CONFIG["port"], 
-                   help=f"수신 포트 (기본: {CONFIG['port']})")
-    
+    p.add_argument("--bind-ip", default=CONFIG["bind_ip"], help=f"수신 바인드 IP (기본: {CONFIG['bind_ip']})")
+    p.add_argument("--port", type=int, default=CONFIG["port"], help=f"수신 포트 (기본: {CONFIG['port']})")
     # 패킷 포맷
-    p.add_argument("--fmt", choices=["auto", "int", "float"], default="auto",
-                   help="패킷 포맷 (기본: auto)")
-    
+    p.add_argument("--fmt", choices=["auto", "int", "float"], default="int", help="패킷 포맷 (기본: auto)")
     # 워치독
-    p.add_argument("--watchdog", type=float, default=CONFIG["watchdog"],
-                   help=f"워치독 타임아웃 초 (기본: {CONFIG['watchdog']}s)")
-    
-    # 스티어링 설정
+    p.add_argument("--watchdog", type=float, default=CONFIG["watchdog"], help=f"워치독 타임아웃 초 (기본: {CONFIG['watchdog']}s)")
+    # 스티어링
     p.add_argument("--angle-scale", type=float, default=CONFIG["angle_scale"],
                    help=f"INT 모드: steer_rad = angle_i / angle_scale (기본: {CONFIG['angle_scale']})")
-    p.add_argument("--angle-invert", action="store_true", default=CONFIG["angle_invert"],
-                   help="스티어링 방향 반전")
+    p.add_argument("--angle-invert", action="store_true", default=CONFIG["angle_invert"], help="스티어링 방향 반전")
     p.add_argument("--steer-scale", type=float, default=CONFIG["steer_scale"],
                    help=f"수신값 → 정규화 스케일 (수신값이 -1~1이면 1.0) (기본: {CONFIG['steer_scale']})")
-    
-    # 스로틀 설정
+    # 스로틀
     p.add_argument("--speed-scale", type=float, default=CONFIG["speed_scale"],
-                   help=f"speed_i → throttle 변환 (기본: {CONFIG['speed_scale']})")
+                   help=f"speed → throttle 변환 (기본: {CONFIG['speed_scale']})")
     p.add_argument("--speed-max", type=float, default=CONFIG["speed_max"],
                    help=f"최대 스로틀 값 (기본: {CONFIG['speed_max']})")
-    
-    # 출력
-    p.add_argument("--verbose", action="store_true", default=CONFIG["verbose"],
-                   help="수신 로그 출력")
-    p.add_argument("--throttle-sec", type=float, default=0.2,
-                   help="로그 출력 간격 (초)")
-    
+    # 로그
+    p.add_argument("--verbose", action="store_true", default=CONFIG["verbose"], help="수신 로그 출력")
+    p.add_argument("--throttle-sec", type=float, default=0.2, help="로그 출력 간격 (초)")
     return p
 
 
@@ -130,8 +119,8 @@ def main():
 
     # 차량 초기화
     car = NvidiaRacecar()
-    car.steering = 0.0  # nvidia_racecar.py의 steering_offset이 적용됨
-    car.throttle = 0.12  # ESC 중립점
+    car.steering = 0.0          # nvidia_racecar.py의 steering_offset이 적용됨
+    car.throttle = 0.12         # ESC 중립점
 
     # 소켓 초기화 (non-blocking)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -147,11 +136,11 @@ def main():
     last_seq: int = -1
     last_rx_ts: float = time.time()
     last_print_ts: float = 0.0
-    latest_data: Optional[Tuple[str, float, int, int, tuple]] = None
-    # latest_data = (fmt, steer_rad, speed_i, seq, addr)
+    latest_data: Optional[Tuple[str, float, float, int, tuple]] = None
+    # latest_data = (fmt_label, steer_rad, speed_f, seq, addr)
 
     print(f"[UDP] listening on {args.bind_ip}:{args.port}")
-    print(f"[UDP] fmt={args.fmt} | INT: {FMT_INT} ({PKT_SIZE_INT}B) | FLOAT: {FMT_FLOAT} ({PKT_SIZE_FLOAT}B)")
+    print(f"[UDP] fmt={args.fmt} | INT: {FMT_INT} ({PKT_SIZE_INT}B) | FLOAT_INT: {FMT_FLOAT_INT} ({PKT_SIZE_FLOAT_INT}B) | FLOAT_FLOAT: {FMT_FLOAT_FLOAT} ({PKT_SIZE_FLOAT_FLOAT}B)")
     print(f"[MAP] angle_scale={args.angle_scale} steer_scale={args.steer_scale}")
     print(f"[MAP] speed_scale={args.speed_scale} speed_max={args.speed_max}")
     if args.verbose:
@@ -159,7 +148,7 @@ def main():
 
     try:
         while True:
-            # === 패킷 수신 (non-blocking, 모든 대기 패킷 처리) ===
+            # === 패킷 수신 ===
             while True:
                 try:
                     data, addr = sock.recvfrom(64)
@@ -173,36 +162,34 @@ def main():
                 if decoded is None:
                     continue
 
-                fmt, steer_rad, speed_i, seq = decoded
+                fmt_label, steer_rad, speed_f, seq = decoded
 
-                # Sequence 체크 (오래된 패킷 무시, 리셋 감지)
+                # Sequence 체크
                 if last_seq != -1 and seq <= last_seq:
                     if last_seq > 100000 and seq < 100:
-                        # 시퀀스 리셋 감지 (새 세션)
                         print("[UDP] Sequence reset detected (new session)")
                         last_seq = -1
                     else:
                         continue  # 오래된 패킷 무시
 
                 last_seq = seq
-                latest_data = (fmt, steer_rad, speed_i, seq, addr)
+                latest_data = (fmt_label, steer_rad, speed_f, seq, addr)
                 last_rx_ts = time.time()
 
             # === 최신 데이터로 차량 제어 ===
             if latest_data is not None:
-                fmt, steer_rad, speed_i, seq, addr = latest_data
+                fmt_label, steer_rad, speed_f, seq, addr = latest_data
 
                 # 스티어링 변환: 수신값 → 정규화 (-1 ~ 1)
-                # steer_rad가 이미 -1~1 범위라면 steer_scale=1.0
                 steer_norm = steer_rad * args.steer_scale
                 if args.angle_invert:
                     steer_norm = -steer_norm
                 steer_norm = clamp(steer_norm, -1.0, 1.0)
 
-                # 스로틀 변환: speed_i → throttle
-                throttle = clamp(float(speed_i) * args.speed_scale, 0.0, args.speed_max)
-                
-                # ESC 중립점 적용 (joystick.py와 동일한 방식)
+                # 스로틀 변환: speed_f → throttle
+                throttle = clamp(float(speed_f) * args.speed_scale, 0.0, args.speed_max)
+
+                # ESC 중립점 적용
                 ESC_NEUTRAL = 0.12
                 if throttle > 0:
                     throttle_cmd = ESC_NEUTRAL + throttle * (1.0 - ESC_NEUTRAL)
@@ -216,36 +203,32 @@ def main():
                 now = time.time()
                 if args.verbose and (now - last_print_ts) >= args.throttle_sec:
                     print(
-                        f"[{fmt.upper()}] seq={seq} steer_raw={steer_rad:+.4f} "
+                        f"[{fmt_label.upper()}] seq={seq} steer_raw={steer_rad:+.4f} "
                         f"-> norm={steer_norm:+.3f} | "
-                        f"speed_i={speed_i} -> thr={throttle_cmd:.3f}"
+                        f"speed={speed_f:+.3f} -> thr={throttle_cmd:.3f}"
                     )
                     last_print_ts = now
 
-            # === 워치독 체크 ===
+            # === 워치독 ===
             now = time.time()
             if (now - last_rx_ts) > args.watchdog:
                 if latest_data is not None:
-                    car.steering = 0.0  # nvidia_racecar.py의 steering_offset이 적용됨
-                    car.throttle = 0.12  # ESC 중립점
+                    car.steering = 0.0
+                    car.throttle = 0.12
                     if args.verbose:
-                        print(
-                            f"[watchdog] no packets > {args.watchdog:.2f}s → "
-                            f"steering=0.0 (centered), throttle=0.12"
-                        )
+                        print(f"[watchdog] no packets > {args.watchdog:.2f}s → steering=0.0, throttle=0.12")
                     latest_data = None
                     last_seq = -1
                 last_rx_ts = now
 
-            # CPU 부하 방지
             time.sleep(0.005)
 
     except KeyboardInterrupt:
         print("\n[UDP] interrupted")
     finally:
         try:
-            car.throttle = 0.12  # ESC 중립점
-            car.steering = 0.0  # nvidia_racecar.py의 steering_offset이 적용됨
+            car.throttle = 0.12
+            car.steering = 0.0
         except Exception:
             pass
         sock.close()
@@ -254,3 +237,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
