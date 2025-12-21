@@ -18,6 +18,8 @@ PKT_SIZE = struct.calcsize(FMT_UPLINK)
 
 TARGET_HZ = 30.0
 WINDOW_DT = 1.0 / TARGET_HZ
+YAW_SCALE = 3.0
+
 
 MAX_YAW_RATE = 6.0
 # [중요] dt 방어 기준을 더 엄격하게 낮춤 (0.1 -> 0.05)
@@ -165,7 +167,7 @@ def main():
                 # if args.verbose: print(f"[Skip] dt spike: {dt:.4f}")
                 continue
 
-            dyaw = quat_delta_yaw(prev_q, q_now)
+            dyaw = quat_delta_yaw(prev_q, q_now) * YAW_SCALE
 
             # 물리 한계 방어
             if abs(dyaw) > MAX_YAW_RATE * dt:
