@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 from __future__ import annotations
 
 import argparse
@@ -14,16 +15,34 @@ from jetracer.teleop.telemetry_common import (
 )
 
 FMT_UPLINK = "!ifffI"
+PKT_SIZE = struct.calcsize(FMT_UPLINK)
 
 TARGET_HZ = 30.0
 WINDOW_DT = 1.0 / TARGET_HZ
 
-# [중요] 데이터 유실을 막았으므로 값이 더 커질 수 있습니다.
-# 테스트 해보고 너무 크면 줄이세요.
-SCALE_FACTOR = 3.3
+MAX_YAW_RATE = 6.0
+MAX_DT = 0.05
 
-# [수정] 14Hz(0.07초) 센서를 감안하여 넉넉하게 늘림
-MAX_DT = 0.2  
+def quat_conj(q):
+    w, x, y, z = q
+    return (w, -x, -y, -z)
+
+def quat_mul(q1, q2):
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return (
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    )
+
+def quat_delta_yaw(q_prev, q_now):
+    qd = quat_mul(quat_conj(q_prev), q_now)
+    qw, qx, qy, qz = qd
+    siny = 2.0 * (qw * qz + qx * qy)
+    cosy = 1.0 - 2.0 * (qy*qy + qz*qz)
+    return math.atan2(siny, cosy)  # rad
 
 def build_parser():
     p = argparse.ArgumentParser()
@@ -32,7 +51,7 @@ def build_parser():
     p.add_argument("--hz", type=float, default=60.0)
     p.add_argument("--car-number", type=int, default=None)
     p.add_argument("--battery-shm-path", default="/dev/shm/jetracer_voltage")
-    p.add_argument("--imu-port", default="/dev/ttyACM1")
+    p.add_argument("--imu-port", default="/dev/ttyACM0")
     p.add_argument("--imu-baud", type=int, default=115200)
     p.add_argument("--poll-sleep", type=float, default=0.0001)
     p.add_argument("--verbose", action="store_true")
@@ -44,31 +63,27 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     target = (args.server_ip, args.server_port)
 
-    try:
-        ser = serial.Serial(args.imu_port, args.imu_baud, timeout=0)
-    except Exception as e:
-        print(f"[ERROR] IMU 연결 실패: {e}")
-        return
-
+    ser = serial.Serial(args.imu_port, args.imu_baud, timeout=0)
     time.sleep(1)
 
     min_interval = 1.0 / max(1.0, float(args.hz))
     next_allowed_send = 0.0
 
+    prev_q = None
     prev_t = None
     acc_dyaw = 0.0
     acc_dt = 0.0
     seq = 0
-    
-    total_accumulated_yaw = 0.0
+
     serial_buffer = b""
 
-    print(f"[시작] Gyro Z 적분 (손실 방지 모드). Scale Factor: {SCALE_FACTOR}")
-    print("테스트 방법: 로봇을 90도 돌리고 Ctrl+C를 누르세요.")
+    total_yaw_rad = 0.0  # [ADDED] 종료 시 총 누적 yaw(rad)
+
+    if args.verbose:
+        print(f"[uplink] started. raw-parsing mode.")
 
     try:
         while True:
-            # 1. 시리얼 읽기
             try:
                 waiting = ser.in_waiting
                 if waiting > 0:
@@ -80,78 +95,100 @@ def main():
 
                 if b'\n' in serial_buffer:
                     parts = serial_buffer.split(b'\n')
-                    
-                    # 마지막 조각은 미완성이므로 버퍼에 남김
                     serial_buffer = parts[-1]
-                    
-                    # [핵심 수정] 버퍼에 있는 '모든' 완성된 패킷을 순서대로 처리
-                    # parts[:-1]에는 완성된 문장들이 들어있음
-                    valid_lines = parts[:-1]
 
+                    valid_line = None
+                    for raw_line in reversed(parts[:-1]):
+                        r = raw_line.strip()
+                        if r.startswith(b"#XYMU=") and r.endswith(b"#"):
+                            valid_line = r
+                            break
+
+                    if valid_line:
+                        line = valid_line.decode(errors="ignore").strip()
+                    else:
+                        continue
                 else:
                     continue
 
-            except Exception:
+            except OSError:
+                time.sleep(0.1)
                 continue
-            
-            # 2. 버퍼에 있던 모든 패킷을 하나씩 다 적분함 (데이터 편식 금지)
-            for raw_line in valid_lines:
-                raw_line = raw_line.strip()
-                if not (raw_line.startswith(b"#XYMU=") and raw_line.endswith(b"#")):
-                    continue
-                
-                try:
-                    line = raw_line.decode(errors="ignore").strip()
-                    content = line.replace("#XYMU=", "").replace("#", "")
-                    d = content.split(",")
-                    
-                    if len(d) < 10: continue
-                    raw_gyro_z = float(d[9])
-                except ValueError:
-                    continue
+            except Exception as e:
+                if args.verbose:
+                    print(f"Parse Error: {e}")
+                continue
 
-                now = time.monotonic()
-                if prev_t is None:
-                    prev_t = now
-                    continue
+            d = line[6:-1].split(",")
+            if len(d) < 7:
+                continue
 
-                dt = now - prev_t
-                
-                # dt가 너무 크면(0.2초 이상) 끊긴 걸로 간주하고 리셋
-                # 하지만 정상적인 14Hz(0.07초) 데이터는 모두 통과시킴
-                if dt <= 0.0 or dt > MAX_DT:
-                    prev_t = now
-                    continue
+            try:
+                qw, qx, qy, qz = map(float, d[3:7])
+            except ValueError:
+                continue
 
-                # 3. 적분 수행
-                step_yaw = (raw_gyro_z * dt) * SCALE_FACTOR
-                acc_dyaw += step_yaw
-                total_accumulated_yaw += step_yaw
-                acc_dt += dt
+            q_now = (qw, qx, qy, qz)
+            now = time.monotonic()
+
+            if prev_q is None:
+                prev_q = q_now
                 prev_t = now
+                continue
 
-            # 4. 전송 (루프 밖에서 누적된 값 전송)
+            dt = now - prev_t
+
+            if dt <= 0.0 or dt > MAX_DT:
+                prev_q = q_now
+                prev_t = now
+                continue
+
+            dyaw = quat_delta_yaw(prev_q, q_now)
+
+            if abs(dyaw) > MAX_YAW_RATE * dt:
+                continue
+
+            prev_q = q_now
+            prev_t = now
+
+            acc_dyaw += dyaw
+            acc_dt += dt
+            total_yaw_rad += dyaw  # [ADDED] 누적
+
             if acc_dt >= WINDOW_DT:
                 seq += 1
+
                 now_send = time.monotonic()
                 if now_send >= next_allowed_send:
                     next_allowed_send = now_send + min_interval
-                    
+
                     voltage = read_voltage(args.battery_shm_path) or 0.0
-                    pkt = struct.pack(FMT_UPLINK, int(vehicle_id), float(voltage),
-                                      float(acc_dyaw), float(acc_dt), int(seq))
+
+                    pkt = struct.pack(
+                        FMT_UPLINK,
+                        int(vehicle_id),
+                        float(voltage),
+                        float(acc_dyaw),
+                        float(acc_dt),
+                        int(seq),
+                    )
                     sock.sendto(pkt, target)
+
+                    if args.verbose:
+                        print(f"UDP send: dψ={acc_dyaw:+.4f} rad dt={acc_dt:.4f}")
 
                 acc_dyaw = 0.0
                 acc_dt = 0.0
 
     except KeyboardInterrupt:
-        print("\n" + "="*40)
-        total_deg = total_accumulated_yaw * 57.29578 
-        print(f"🛑 테스트 종료")
-        print(f"👉 총 회전 각도: {total_deg:.2f} 도")
-        print("="*40)
-             
+        # [ADDED] 종료 시 총 각도 출력 (rad -> deg)
+        total_yaw_deg = total_yaw_rad * (180.0 / math.pi)
+        print("\n" + "=" * 40)
+        print("🛑 종료")
+        print(f"총 yaw 변화량: {total_yaw_rad:+.6f} rad")
+        print(f"총 yaw 변화량: {total_yaw_deg:+.2f} deg")
+        print("=" * 40)
+
     finally:
         ser.close()
         sock.close()
