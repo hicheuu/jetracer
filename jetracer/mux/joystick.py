@@ -17,7 +17,7 @@ udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 # Xbox 360 기본 매핑 (evtest 기준)
 # ======================
 STEER_AXIS = ecodes.ABS_X        # 왼쪽 스틱 좌우
-THROTTLE_AXIS = ecodes.ABS_RZ    # RT 트리거
+THROTTLE_AXIS = ecodes.ABS_RY    # RT 트리거
 
 TOGGLE_BTN = ecodes.BTN_Y        # Y 버튼
 STOP_BTN   = ecodes.BTN_X        # X 버튼
@@ -91,7 +91,8 @@ def main():
 
                 elif event.code == THROTTLE_AXIS:
                     # [0,255] → [-1,1]
-                    thr_raw = norm_axis(event.value, TRIGGER_MIN, TRIGGER_MAX)
+                    thr_raw = norm_axis(event.value, -32768, 32767)
+
 
             # ===== 제어 계산 =====
             steer = apply_deadzone(steer_raw, args.deadzone)
