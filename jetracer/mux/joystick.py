@@ -37,7 +37,7 @@ def norm_axis(val, lo, hi):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="evdev joystick (stable state-based)")
+    ap = argparse.ArgumentParser(description="evdev joystick (stable, state-based)")
     ap.add_argument("--device", default="/dev/input/event2")
     ap.add_argument("--deadzone", type=float, default=0.08)
     ap.add_argument("--steer-scale", type=float, default=1.0)
@@ -51,10 +51,10 @@ def main():
     print(f"[JOY] Using device: {dev.path} ({dev.name})")
 
     # ======================
-    # 상태 변수 (⭐ 핵심)
+    # 상태 변수 (핵심)
     # ======================
-    steer = 0.0
-    thr = 0.0
+    steer = 0.0          # 마지막 유효 스티어링
+    thr = 0.0            # 마지막 유효 스로틀
 
     steer_cmd = 0.0
     throttle_cmd = 0.12
@@ -67,22 +67,28 @@ def main():
 
     lock = threading.Lock()
     period = 1.0 / args.hz
+    running = True
 
     # ======================
     # 송신 스레드 (고정 주기)
     # ======================
     def sender_loop():
-        while True:
-            with lock:
-                msg = {
-                    "src": "joystick",
-                    "steer": steer_cmd,
-                    "throttle": throttle_cmd
-                }
-            udsock.sendto(json.dumps(msg).encode(), SOCK_PATH)
+        nonlocal running
+        while running:
+            try:
+                with lock:
+                    msg = {
+                        "src": "joystick",
+                        "steer": steer_cmd,
+                        "throttle": throttle_cmd
+                    }
+                udsock.sendto(json.dumps(msg).encode(), SOCK_PATH)
+            except OSError:
+                break
             time.sleep(period)
 
-    threading.Thread(target=sender_loop, daemon=True).start()
+    sender_thread = threading.Thread(target=sender_loop, daemon=True)
+    sender_thread.start()
 
     # ======================
     # evdev 이벤트 루프
@@ -112,14 +118,14 @@ def main():
 
                 # ---------- 축 ----------
                 elif event.type == ecodes.EV_ABS:
-                    # 스티어링: 이벤트 들어올 때만 갱신
+                    # 스티어링
                     if event.code == STEER_AXIS:
                         steer_raw = norm_axis(event.value, -32768, 32767)
                         steer = apply_deadzone(steer_raw, args.deadzone)
                         if args.invert_steer:
                             steer = -steer
 
-                    # 스로틀: 이벤트 들어올 때만 갱신 (⭐ 중요)
+                    # 스로틀 (⭐ 상태 유지 핵심)
                     elif event.code == THROTTLE_AXIS:
                         thr_raw = norm_axis(event.value, -32768, 32767)
                         thr = apply_deadzone(thr_raw, args.deadzone)
@@ -139,7 +145,10 @@ def main():
 
     except KeyboardInterrupt:
         print("\n[JOY] stopping")
+
     finally:
+        running = False
+        time.sleep(period * 1.5)
         udsock.close()
 
 
