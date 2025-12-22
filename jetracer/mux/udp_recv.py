@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
 Simple UDP Receiver -> UDS Sender
-- Format: !fiI (float steer, int speed, uint seq)
+- Format: !ffI (float steer, float speed, uint seq)
 - UDP watchdog에서는 제어값을 변경하지 않음
 - 최종 정지는 mux.py watchdog에 위임
+- speed sanity check 포함 (안전)
 """
 
 import socket
 import struct
 import time
 import json
+import math
 
 # =========================
 # UDS 설정
@@ -31,29 +33,31 @@ STEER_GAIN = 1.0
 # =========================
 # Throttle 매핑 설정
 # =========================
-
-SPEED_1_THROTTLE = 0.225  # speed=1일 때 throttle 값
-SPEED_5_THROTTLE = 0.235  # speed=5일 때 throttle 값
-
+SPEED_1_THROTTLE = 0.225
+SPEED_5_THROTTLE = 0.235
 
 MAX_THROTTLE = 0.36
 ESC_NEUTRAL = 0.12
 
 WATCHDOG_TIMEOUT = 1.0
 
+# speed 유효 범위 (⭐ 핵심 안전장치)
+SPEED_MIN = 0.0
+SPEED_MAX = 5.0
+
 
 def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
-def speed_to_throttle(speed):
-    if speed == 0:
+def speed_to_throttle(speed: float) -> float:
+    if speed <= 0.0:
         return ESC_NEUTRAL
 
     slope = (SPEED_5_THROTTLE - SPEED_1_THROTTLE) / (5.0 - 1.0)
     intercept = SPEED_1_THROTTLE - slope * 1.0
 
-    throttle = slope * float(speed) + intercept
+    throttle = slope * speed + intercept
     return clamp(throttle, ESC_NEUTRAL, ESC_NEUTRAL + MAX_THROTTLE)
 
 
@@ -64,13 +68,14 @@ def main():
 
     print(f"[UDP] Listening on {UDP_IP}:{UDP_PORT}")
     print(
-        f"[UDP] speed=1 -> thr={SPEED_1_THROTTLE:.3f}, "
+        f"[UDP] format=!ffI | "
+        f"speed=1 -> thr={SPEED_1_THROTTLE:.3f}, "
         f"speed=5 -> thr={SPEED_5_THROTTLE:.3f}"
     )
 
     last_rx_time = time.time()
 
-    # ⭐ 마지막 유효 명령 상태 유지
+    # 마지막 유효 명령 상태
     last_steer_cmd = 0.0
     last_throttle_cmd = ESC_NEUTRAL
 
@@ -80,7 +85,17 @@ def main():
                 data, _ = sock.recvfrom(64)
 
                 if len(data) >= 12:
-                    raw_steer, raw_speed, seq = struct.unpack("!fiI", data[:12])
+                    # ⭐ 포맷 수정 (중요)
+                    raw_steer, raw_speed, seq = struct.unpack("!ffI", data[:12])
+
+                    # ===== speed sanity check (필수) =====
+                    if not math.isfinite(raw_speed):
+                        print(f"[UDP] invalid speed (nan/inf), drop")
+                        continue
+
+                    if raw_speed < SPEED_MIN or raw_speed > SPEED_MAX:
+                        print(f"[UDP] invalid speed={raw_speed:.3f}, drop")
+                        continue
 
                     # ===== steering =====
                     steer_val = raw_steer * STEER_GAIN
@@ -108,19 +123,18 @@ def main():
                     if seq % 20 == 0:
                         print(
                             f"[UDP→MUX] seq={seq:<5} "
-                            f"speed={raw_speed} -> thr={throttle_cmd:.3f} "
+                            f"speed={raw_speed:.2f} -> thr={throttle_cmd:.3f} "
                             f"steer={steer_cmd:+.3f}"
                         )
 
             except BlockingIOError:
                 pass
-            except struct.error:
-                pass
+            except struct.error as e:
+                print(f"[UDP] struct error: {e}")
 
-            # ===== watchdog (⭐ 제어값 변경 금지) =====
+            # ===== watchdog (제어 개입 금지) =====
             if time.time() - last_rx_time > WATCHDOG_TIMEOUT:
-                # 여기서는 아무 제어 명령도 보내지 않음
-                # → mux.py watchdog이 최종 정지 판단
+                # 아무 제어도 보내지 않음
                 last_rx_time = time.time()
                 print("[UDP] watchdog (no control override)")
 
