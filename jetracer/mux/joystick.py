@@ -3,8 +3,9 @@ import argparse
 import time
 import json
 import socket
+import math
 
-import pygame
+from evdev import InputDevice, ecodes, categorize
 
 # ======================
 # UDS 설정
@@ -12,8 +13,18 @@ import pygame
 SOCK_PATH = "/tmp/jetracer_ctrl.sock"
 udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 
-TOGGLE_BTN = 5
-STOP_BTN   = 4
+# ======================
+# Xbox 360 기본 매핑 (evtest 기준)
+# ======================
+STEER_AXIS = ecodes.ABS_X        # 왼쪽 스틱 좌우
+THROTTLE_AXIS = ecodes.ABS_RZ    # RT 트리거
+
+TOGGLE_BTN = ecodes.BTN_Y        # Y 버튼
+STOP_BTN   = ecodes.BTN_X        # X 버튼
+
+# Xbox 트리거 범위
+TRIGGER_MIN = 0
+TRIGGER_MAX = 255
 
 
 def clamp(x, lo=-1.0, hi=1.0):
@@ -24,91 +35,72 @@ def apply_deadzone(v, dz):
     return 0.0 if abs(v) < dz else v
 
 
+def norm_axis(val, lo, hi):
+    """[lo,hi] → [-1,1]"""
+    return (2.0 * (val - lo) / (hi - lo)) - 1.0
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Joystick -> JetRacer (UDS sender)")
-    ap.add_argument("--steer-axis", type=int, default=0)
-    ap.add_argument("--throttle-axis", type=int, default=4)
-    ap.add_argument("--invert-steer", action="store_true")
-    ap.add_argument("--invert-throttle", action="store_true", default=True)
+    ap = argparse.ArgumentParser(description="evdev Joystick -> JetRacer (UDS)")
+    ap.add_argument("--device", default="/dev/input/event2")
     ap.add_argument("--deadzone", type=float, default=0.08)
     ap.add_argument("--steer-scale", type=float, default=1.0)
     ap.add_argument("--throttle-scale", type=float, default=0.24)
-    ap.add_argument("--steer-offset", type=float, default=None, 
-                    help="조이스틱 스티어링 오프셋 (None이면 자동 캘리브레이션)")
+    ap.add_argument("--invert-steer", action="store_true")
+    ap.add_argument("--invert-throttle", action="store_true", default=True)
     args = ap.parse_args()
 
-    pygame.init()
-    pygame.joystick.init()
-    if pygame.joystick.get_count() == 0:
-        raise RuntimeError("No joystick detected")
+    dev = InputDevice(args.device)
+    print(f"[JOY] Using device: {dev.path} ({dev.name})")
 
-    js = pygame.joystick.Joystick(0)
-    js.init()
-
-    # 조이스틱 중립점 캘리브레이션
-    if args.steer_offset is None:
-        print("[JOY] 조이스틱 중립점 캘리브레이션 중... (조이스틱을 중앙에 두세요)")
-        time.sleep(1.0)  # 사용자가 조이스틱을 중앙에 둘 시간 제공
-        
-        # 여러 샘플을 읽어 평균값 계산
-        samples = []
-        for _ in range(50):
-            pygame.event.pump()
-            samples.append(js.get_axis(args.steer_axis))
-            time.sleep(0.01)
-        
-        steer_offset = sum(samples) / len(samples)
-        print(f"[JOY] 스티어링 오프셋: {steer_offset:.4f} (자동 캘리브레이션)")
-    else:
-        steer_offset = args.steer_offset
-        print(f"[JOY] 스티어링 오프셋: {steer_offset:.4f} (수동 설정)")
+    # 상태 변수
+    steer_raw = 0.0
+    thr_raw = 0.0
 
     last_toggle = 0
     last_stop = 0
 
+    ESC_NEUTRAL = 0.12
+    REVERSE_START = -0.1
+
     try:
-        while True:
-            pygame.event.pump()
+        for event in dev.read_loop():
+            if event.type == ecodes.EV_KEY:
+                if event.code == TOGGLE_BTN:
+                    if event.value == 1 and last_toggle == 0:
+                        udsock.sendto(
+                            json.dumps({"src": "joystick", "event": "toggle"}).encode(),
+                            SOCK_PATH
+                        )
+                        print("[BTN] toggle")
+                    last_toggle = event.value
 
-            # ===== 버튼 처리 =====
-            toggle = js.get_button(TOGGLE_BTN)
-            stop = js.get_button(STOP_BTN)
+                if event.code == STOP_BTN:
+                    if event.value == 1 and last_stop == 0:
+                        udsock.sendto(
+                            json.dumps({"src": "joystick", "event": "estop"}).encode(),
+                            SOCK_PATH
+                        )
+                        print("[BTN] EMERGENCY STOP")
+                    last_stop = event.value
 
-            if toggle == 1 and last_toggle == 0:
-                udsock.sendto(
-                    json.dumps({"src": "joystick", "event": "toggle"}).encode(),
-                    SOCK_PATH
-                )
-                print("[BTN] toggle")
+            elif event.type == ecodes.EV_ABS:
+                if event.code == STEER_AXIS:
+                    # [-32768, 32767]
+                    steer_raw = norm_axis(event.value, -32768, 32767)
 
-            if stop == 1 and last_stop == 0:
-                udsock.sendto(
-                    json.dumps({"src": "joystick", "event": "estop"}).encode(),
-                    SOCK_PATH
-                )
-                print("[BTN] EMERGENCY STOP")
+                elif event.code == THROTTLE_AXIS:
+                    # [0,255] → [-1,1]
+                    thr_raw = norm_axis(event.value, TRIGGER_MIN, TRIGGER_MAX)
 
-            last_toggle = toggle
-            last_stop = stop
-
-            # ===== 축 처리 =====
-            steer_raw = js.get_axis(args.steer_axis)
-            thr_raw = js.get_axis(args.throttle_axis)
-
-            # 조이스틱 오프셋 보정
-            steer_corrected = steer_raw - steer_offset
-            
-            # 데드존 적용
-            steer = apply_deadzone(steer_corrected, args.deadzone)
+            # ===== 제어 계산 =====
+            steer = apply_deadzone(steer_raw, args.deadzone)
             thr = apply_deadzone(thr_raw, args.deadzone)
 
             if args.invert_steer:
                 steer = -steer
             if args.invert_throttle:
                 thr = -thr
-
-            ESC_NEUTRAL = 0.12
-            REVERSE_START = -0.1
 
             if thr > 0:
                 throttle_cmd = ESC_NEUTRAL + thr * (1.0 - ESC_NEUTRAL) * args.throttle_scale
@@ -120,7 +112,6 @@ def main():
             throttle_cmd = clamp(throttle_cmd, -1.0, 1.0)
             steering_cmd = clamp(steer * args.steer_scale)
 
-            # ===== UDS 송신 =====
             udsock.sendto(
                 json.dumps({
                     "src": "joystick",
@@ -130,21 +121,11 @@ def main():
                 SOCK_PATH
             )
 
-            time.sleep(0.03)
-
     except KeyboardInterrupt:
-        pass
+        print("\n[JOY] stopping")
     finally:
-        pygame.quit()
+        udsock.close()
 
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
