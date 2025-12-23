@@ -62,14 +62,13 @@ ExecStart=/home/%i/miniconda3/envs/jet/bin/python3 -m jetracer.diagnostics.batte
 
 Restart=on-failure
 RestartSec=5
-StartLimitIntervalSec=60
-StartLimitBurst=3
 
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
 
 
 # 서비스 등록 및 시작 (username을 본인 계정명으로 변경)
