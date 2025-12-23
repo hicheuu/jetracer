@@ -47,20 +47,30 @@ sudo udevadm trigger
 sudo tee /etc/systemd/system/battery_monitor@.service > /dev/null << 'EOF'
 [Unit]
 Description=JetRacer Battery Monitor (%i)
-After=network-online.target
+After=NetworkManager.service
+Wants=NetworkManager.service
 
 [Service]
 Type=simple
 User=%i
 WorkingDirectory=/home/%i/jetracer
-ExecStart=/home/%i/miniforge3/envs/jet/bin/python3 -m jetracer.diagnostics.battery_monitor
-Restart=always
-RestartSec=2
+
+# 네트워크 / udev 안정화 대기
+ExecStartPre=/bin/sleep 15
+
+ExecStart=/home/%i/miniconda3/envs/jet/bin/python3 -m jetracer.diagnostics.battery_monitor
+
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
 
 # 서비스 등록 및 시작 (username을 본인 계정명으로 변경)
 sudo systemctl daemon-reload
