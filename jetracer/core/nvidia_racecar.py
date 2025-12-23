@@ -215,8 +215,9 @@ class NvidiaRacecar(Racecar):
         # 1. 전압 보정 계수 계산
         v_gain = self._get_voltage_gain()
         
-        # 2. 최종 출력값 계산 (입력값 * 기본게인 * 전압보정 + ESC 중립 오프셋)
-        final_throttle = change["new"] * self.throttle_gain * v_gain + self.throttle_offset
+        # 2. 최종 출력값 계산 (joystick/udp에서 이미 neutral 포함된 값 전달됨)
+        #    여기서는 전압 보정만 적용
+        final_throttle = change["new"] * v_gain
         
         # 3. 안전 범위 클리핑 (-1.0 ~ 1.0)
         if final_throttle > 1.0:
