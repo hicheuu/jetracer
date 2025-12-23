@@ -1,18 +1,12 @@
-#!/usr/bin/env python3
-"""
-Simple UDP Receiver -> UDS Sender
-- Format: !ffI (float steer, float speed, uint seq)
-- UDP watchdog에서는 제어값을 변경하지 않음
-- 최종 정지는 mux.py watchdog에 위임
-- speed sanity check 포함 (안전)
-"""
-
 import socket
 import struct
 import time
 import json
 import math
 import argparse
+import multiprocessing
+import os
+import sys
 
 # =========================
 # CLI 인자
@@ -46,7 +40,6 @@ UDP_PORT = 5555
 STEER_GAIN = 2.0
 
 MAX_THROTTLE = 0.36
-ESC_NEUTRAL = 0.12
 
 WATCHDOG_TIMEOUT = 1.0
 
@@ -59,44 +52,68 @@ def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
+def load_config(log_queue=None):
+    cur_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(cur_dir, "../../config/nvidia_racecar_config.json")
+    
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+            neutral = config.get("throttle", {}).get("neutral")
+            if neutral is None:
+                raise ValueError("Output throttle.neutral not found in config")
+            
+            if log_queue:
+                log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Loaded ESC_NEUTRAL={neutral} from config"})
+            else:
+                print(f"[UDP] Loaded ESC_NEUTRAL={neutral} from config")
+                
+            return neutral
+    except Exception as e:
+        msg = f"CRITICAL: Failed to load config: {e}"
+        if log_queue:
+            log_queue.put({"type": "LOG", "src": "UDP", "msg": msg})
+        else:
+            print(f"[UDP] {msg}")
+        sys.exit(1)
+
+
 def speed_to_throttle(speed: float,
                       speed1_thr: float,
-                      speed5_thr: float) -> float:
+                      speed5_thr: float,
+                      neutral: float) -> float:
     if speed <= 0.0:
-        return ESC_NEUTRAL
+        return neutral
 
     slope = (speed5_thr - speed1_thr) / (5.0 - 1.0)
     intercept = speed1_thr - slope * 1.0
 
     throttle = slope * speed + intercept
-    return clamp(throttle, ESC_NEUTRAL, ESC_NEUTRAL + MAX_THROTTLE)
+    return clamp(throttle, neutral, neutral + MAX_THROTTLE)
 
 
-def main():
-    args = parse_args()
-
-    SPEED_5_THROTTLE = args.speed5_throttle
+def run_udp(log_queue, stop_event, speed5_throttle):
+    ESC_NEUTRAL = load_config(log_queue)
+    
+    SPEED_5_THROTTLE = speed5_throttle
     SPEED_1_THROTTLE = SPEED_5_THROTTLE - 0.01  # ⭐ 자동 계산
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_IP, UDP_PORT))
     sock.setblocking(False)
 
-    print(f"[UDP] Listening on {UDP_IP}:{UDP_PORT}")
-    print(
-        f"[UDP] format=!ffI | "
-        f"speed=1 -> thr={SPEED_1_THROTTLE:.3f}, "
-        f"speed=5 -> thr={SPEED_5_THROTTLE:.3f}"
-    )
+    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Listening on {UDP_IP}:{UDP_PORT}"})
+    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"format=!ffI | speed=1 -> thr={SPEED_1_THROTTLE:.3f}, speed=5 -> thr={SPEED_5_THROTTLE:.3f}"})
 
     last_rx_time = time.time()
+    last_log_time = 0.0
 
     # 마지막 유효 명령 상태
     last_steer_cmd = 0.0
     last_throttle_cmd = ESC_NEUTRAL
 
     try:
-        while True:
+        while not stop_event.is_set():
             try:
                 data, _ = sock.recvfrom(64)
 
@@ -105,11 +122,11 @@ def main():
 
                     # ===== speed sanity check =====
                     if not math.isfinite(raw_speed):
-                        print("[UDP] invalid speed (nan/inf), drop")
+                        log_queue.put({"type": "LOG", "src": "UDP", "msg": "invalid speed (nan/inf), drop"})
                         continue
 
                     if raw_speed < SPEED_MIN or raw_speed > SPEED_MAX:
-                        print(f"[UDP] invalid speed={raw_speed:.3f}, drop")
+                        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"invalid speed={raw_speed:.3f}, drop"})
                         continue
 
                     # ===== steering =====
@@ -120,8 +137,10 @@ def main():
                     throttle_cmd = speed_to_throttle(
                         raw_speed,
                         SPEED_1_THROTTLE,
-                        SPEED_5_THROTTLE
+                        SPEED_5_THROTTLE,
+                        ESC_NEUTRAL
                     )
+
 
                     # 상태 갱신
                     last_steer_cmd = steer_cmd
@@ -138,32 +157,47 @@ def main():
                     )
 
                     last_rx_time = time.time()
+                    now = time.time()
 
-                    if seq % 20 == 0:
-                        print(
-                            f"[UDP→MUX] seq={seq:<5} "
-                            f"speed={raw_speed:.2f} -> thr={throttle_cmd:.3f} "
-                            f"steer={steer_cmd:+.3f}"
-                        )
+                    # Throttled Logging (0.5s)
+                    if now - last_log_time > 0.5:
+                         log_queue.put({
+                             "type": "LOG",
+                             "src": "UDP",
+                             "msg": f"seq={seq:<5} speed={raw_speed:.2f} -> thr={throttle_cmd:.3f} steer={steer_cmd:+.3f}"
+                         })
+                         last_log_time = now
 
             except BlockingIOError:
                 pass
             except struct.error as e:
-                print(f"[UDP] struct error: {e}")
+                 log_queue.put({"type": "LOG", "src": "UDP", "msg": f"struct error: {e}"})
 
             # ===== watchdog (제어 개입 금지) =====
             if time.time() - last_rx_time > WATCHDOG_TIMEOUT:
                 last_rx_time = time.time()
-                print("[UDP] watchdog (no control override)")
+                log_queue.put({"type": "LOG", "src": "UDP", "msg": "watchdog (no control override)"})
 
             time.sleep(0.005)
 
     except KeyboardInterrupt:
-        print("\n[UDP] stopping")
+        pass
     finally:
+        log_queue.put({"type": "LOG", "src": "UDP", "msg": "stopping"})
         sock.close()
         udsock.close()
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    
+    class PrintQueue:
+        def put(self, item):
+            if item.get("type") == "LOG":
+                print(f"[{item['src']}] {item['msg']}")
+
+    stop = multiprocessing.Event()
+    try:
+        run_udp(PrintQueue(), stop, args.speed5_throttle)
+    except KeyboardInterrupt:
+        stop.set()
