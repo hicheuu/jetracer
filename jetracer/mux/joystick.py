@@ -8,6 +8,8 @@ from evdev import InputDevice, ecodes, list_devices
 import os
 import multiprocessing
 
+from jetracer.core.nvidia_racecar import load_config
+
 # ======================
 # UDS 설정
 # ======================
@@ -60,34 +62,12 @@ def find_device(target_name: str = None):
     
     return None
 
-def load_config(log_queue=None):
-    cur_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(cur_dir, "../../config/nvidia_racecar_config.json")
-    
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-            neutral = config.get("throttle", {}).get("neutral")
-            if neutral is None:
-                raise ValueError("Output throttle.neutral not found in config")
-            
-            if log_queue:
-                log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Loaded ESC_NEUTRAL={neutral} from config"})
-            else:
-                print(f"[JOY] Loaded ESC_NEUTRAL={neutral} from config")
-                
-            return neutral
-    except Exception as e:
-        msg = f"CRITICAL: Failed to load config: {e}"
-        if log_queue:
-            log_queue.put({"type": "LOG", "src": "JOY", "msg": msg})
-        else:
-            print(f"[JOY] {msg}")
-        sys.exit(1)
 
 
 def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=1.0, max_throttle=0.24, invert_steer=False, invert_throttle=True, hz=30.0):
-    ESC_NEUTRAL = load_config(log_queue)
+    config = load_config()
+    ESC_NEUTRAL = config.get("throttle", {}).get("neutral", 0.12) if config else 0.12
+    log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Loaded ESC_NEUTRAL={ESC_NEUTRAL} from config"})
     REVERSE_START = -0.1
 
     device_path = device

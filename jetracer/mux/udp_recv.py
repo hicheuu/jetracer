@@ -8,6 +8,8 @@ import multiprocessing
 import os
 import sys
 
+from jetracer.core.nvidia_racecar import load_config
+
 # =========================
 # CLI 인자
 # =========================
@@ -52,30 +54,6 @@ def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
-def load_config(log_queue=None):
-    cur_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(cur_dir, "../../config/nvidia_racecar_config.json")
-    
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-            neutral = config.get("throttle", {}).get("neutral")
-            if neutral is None:
-                raise ValueError("Output throttle.neutral not found in config")
-            
-            if log_queue:
-                log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Loaded ESC_NEUTRAL={neutral} from config"})
-            else:
-                print(f"[UDP] Loaded ESC_NEUTRAL={neutral} from config")
-                
-            return neutral
-    except Exception as e:
-        msg = f"CRITICAL: Failed to load config: {e}"
-        if log_queue:
-            log_queue.put({"type": "LOG", "src": "UDP", "msg": msg})
-        else:
-            print(f"[UDP] {msg}")
-        sys.exit(1)
 
 
 def speed_to_throttle(speed: float,
@@ -93,7 +71,9 @@ def speed_to_throttle(speed: float,
 
 
 def run_udp(log_queue, stop_event, speed5_throttle):
-    ESC_NEUTRAL = load_config(log_queue)
+    config = load_config()
+    ESC_NEUTRAL = config.get("throttle", {}).get("neutral", 0.12) if config else 0.12
+    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Loaded ESC_NEUTRAL={ESC_NEUTRAL} from config"})
     
     SPEED_5_THROTTLE = speed5_throttle
     SPEED_1_THROTTLE = SPEED_5_THROTTLE - 0.01  # ⭐ 자동 계산

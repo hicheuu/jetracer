@@ -2,7 +2,6 @@ import socket
 import json
 import time
 import os
-import sys
 import multiprocessing
 
 from jetracer.core import NvidiaRacecar
@@ -12,25 +11,8 @@ SOCK_PATH = "/tmp/jetracer_ctrl.sock"
 JOY_TIMEOUT = 0.5
 UDP_TIMEOUT = 1.2   # ← UDP watchdog보다 살짝 큼
 
-def load_config():
-    cur_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(cur_dir, "../../config/nvidia_racecar_config.json")
-    
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-            neutral = config.get("throttle", {}).get("neutral")
-            if neutral is None:
-                raise ValueError("Output throttle.neutral not found in config")
-            print(f"[MUX] Loaded ESC_NEUTRAL={neutral} from config")
-            return neutral
-    except Exception as e:
-        print(f"[MUX] CRITICAL: Failed to load config: {e}")
-        sys.exit(1)
 
 def run_mux(log_queue, stop_event):
-    ESC_NEUTRAL = load_config()
-
     # 소켓 초기화
     if os.path.exists(SOCK_PATH):
         try:
@@ -43,6 +25,8 @@ def run_mux(log_queue, stop_event):
     sock.setblocking(False)
 
     car = NvidiaRacecar()
+    ESC_NEUTRAL = car._throttle_neutral
+    
     car.steering = 0.0
     car.throttle = ESC_NEUTRAL
 
