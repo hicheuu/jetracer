@@ -64,26 +64,19 @@ def runner(args):
                         should_print = True
                         
                     elif src == "JOY":
-                        # Show Joy logs if mode is joystick or if it's a device/error message (not continuous)
-                        # To be safe, let's trust the 'mode' for continuous data. 
-                        # But button presses (events) should arguably always be seen? 
-                        # User request: "joystick의 로그를 보고... udp_recv일때 udp_recv로그를 보도록"
-                        # This implies filtering the *continuous* control logs.
-                        # Critical logs (errors, device info) should probably pass through.
-                        # For simplicity, assuming 'msg' doesn't have metadata about priority.
-                        # Heuristic: if it's an error or initialization, show it.
-                        if "steer=" not in msg and "max_throttle" not in msg:
-                             # Likely setup/error message
-                             should_print = True
-                        elif current_mode == "joystick":
-                             should_print = True
+                        # Show Joy logs if mode is joystick or if it's an error/setup message
+                        if current_mode == "joystick":
+                            should_print = True
+                        elif "Error" in msg or "Device" in msg or "stopping" in msg:
+                            should_print = True
 
                     elif src == "UDP":
-                        if "steer=" not in msg:
-                             # Setup/error
-                             should_print = True
-                        elif current_mode == "udp":
-                             should_print = True
+                        # Show UDP logs only when in UDP mode, except for actual errors
+                        if current_mode == "udp":
+                            should_print = True
+                        elif "Error" in msg or "stopping" in msg:
+                            should_print = True
+                        # watchdog 등 기타 메시지는 UDP 모드가 아닐 때 숨김
 
                     if should_print:
                         print(f"[{src}] {msg}")
