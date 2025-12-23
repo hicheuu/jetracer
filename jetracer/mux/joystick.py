@@ -108,6 +108,9 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
     current_max_throttle = max_throttle
 
     last_toggle = 0
+    last_toggle_time = 0.0  # Debounce timer
+    TOGGLE_DEBOUNCE = 0.5   # 0.5초간 재토글 방지
+    
     last_stop = 0
     last_thr_up = 0
     last_thr_dn = 0
@@ -163,12 +166,14 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
                     # ---------- 버튼 ----------
                     if event.type == ecodes.EV_KEY:
                         if event.code == TOGGLE_BTN:
-                            if event.value == 1 and last_toggle == 0:
+                            now_btn = time.time()
+                            if event.value == 1 and last_toggle == 0 and (now_btn - last_toggle_time) > TOGGLE_DEBOUNCE:
                                 udsock.sendto(
                                     json.dumps({"src": "joystick", "event": "toggle"}).encode(),
                                     SOCK_PATH
                                 )
                                 log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] toggle"})
+                                last_toggle_time = now_btn
                             last_toggle = event.value
 
                         elif event.code == STOP_BTN:

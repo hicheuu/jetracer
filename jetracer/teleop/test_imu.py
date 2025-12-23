@@ -7,34 +7,31 @@ import struct
 import time
 import serial
 import math
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 
-from jetracer.teleop.telemetry_common import (
-    infer_car_number,
-    read_voltage,
-)
+from jetracer.teleop.telemetry_common import infer_car_number, read_voltage
 
 # vehicle_id(int32), voltage(float32), dyaw(float32), dt(float32), seq(uint32)
 FMT_UPLINK = "!ifffI"
-PKT_SIZE = struct.calcsize(FMT_UPLINK)
 
-# Telemetry window (send dyaw,dt at ~30Hz by default)
-TARGET_HZ = 30.0
-WINDOW_DT = 1.0 / TARGET_HZ
+MAX_YAW_RATE = 6.0       # rad/s
+HARD_RESET_DT = 0.30     # silence/gap threshold
 
-# Physics guard
-MAX_YAW_RATE = 6.0      # rad/s
-MAX_DT = 0.10           # (E) "soft" dt threshold used for filtering logic
-HARD_RESET_DT = 0.30    # (B) gap threshold to hard-reset baseline
+def quat_dot(q1: Tuple[float, float, float, float],
+             q2: Tuple[float, float, float, float]) -> float:
+    return q1[0]*q2[0] + q1[1]*q2[1] + q1[2]*q2[2] + q1[3]*q2[3]
+
+def quat_normalize(q: Tuple[float, float, float, float]) -> Optional[Tuple[float, float, float, float]]:
+    n = math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3])
+    if not (0.8 <= n <= 1.2):
+        return None
+    return (q[0]/n, q[1]/n, q[2]/n, q[3]/n)
 
 def quat_conj(q: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
-    w, x, y, z = q
-    return (w, -x, -y, -z)
+    return (q[0], -q[1], -q[2], -q[3])
 
-def quat_mul(
-    q1: Tuple[float, float, float, float],
-    q2: Tuple[float, float, float, float],
-) -> Tuple[float, float, float, float]:
+def quat_mul(q1: Tuple[float, float, float, float],
+             q2: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
     return (
@@ -46,9 +43,6 @@ def quat_mul(
 
 def quat_delta_yaw(q_prev: Tuple[float, float, float, float],
                    q_now: Tuple[float, float, float, float]) -> float:
-    """
-    Returns delta yaw (rad) from q_prev -> q_now using quaternion relative rotation.
-    """
     qd = quat_mul(quat_conj(q_prev), q_now)
     qw, qx, qy, qz = qd
     siny = 2.0 * (qw * qz + qx * qy)
@@ -57,248 +51,185 @@ def quat_delta_yaw(q_prev: Tuple[float, float, float, float],
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser()
-    p.add_argument("--server-ip", required=True, default="192.168.1.100")
+    p.add_argument("--server-ip", required=True)
     p.add_argument("--server-port", type=int, default=5560)
-    p.add_argument("--hz", type=float, default=60.0)  # max send rate (rate limit)
     p.add_argument("--car-number", type=int, default=None)
     p.add_argument("--battery-shm-path", default="/dev/shm/jetracer_voltage")
+    p.add_argument("--imu-hz", type=float, default=100.0, help="Nominal IMU output rate")
     p.add_argument("--imu-port", default="/dev/ttyACM0")
     p.add_argument("--imu-baud", type=int, default=115200)
-    # (D) poll-sleep default increased to 0.001 for CPU efficiency
     p.add_argument("--poll-sleep", type=float, default=0.001)
-    p.add_argument("--yaw-scale", type=float, default=1.0,
-                   help="Optional yaw scale multiplier. Keep 1.0 unless you must calibrate.")
+    p.add_argument("--yaw-scale", type=float, default=1.0)
     p.add_argument("--verbose", action="store_true")
     return p
 
-def parse_quat_from_line(line: str) -> Optional[Tuple[float, float, float, float]]:
-    """
-    Expected format example: '#XYMU=...,qw,qx,qy,qz,...#'
-    """
-    if not line.startswith("#XYMU=") or not line.endswith("#"):
-        return None
-    d = line[6:-1].split(",")
-    if len(d) < 7:
-        return None
-    try:
-        qw, qx, qy, qz = map(float, d[3:7])
-    except ValueError:
-        return None
-    return (qw, qx, qy, qz)
-
 def main() -> None:
     args = build_parser().parse_args()
-    vehicle_id = infer_car_number(args.car_number)
 
+    vehicle_id = infer_car_number(args.car_number)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     target = (args.server_ip, args.server_port)
 
     try:
-        # Non-blocking
         ser = serial.Serial(args.imu_port, args.imu_baud, timeout=0)
     except Exception as e:
-        print(f"[ERROR] IMU 연결 실패: {e}")
+        print(f"[ERROR] IMU Connection Failed: {e}")
         return
 
-    time.sleep(1)
+    # nominal dt
+    sub_dt_nom = 1.0 / max(1.0, float(args.imu_hz))
 
-    # Send rate limit (upper bound)
-    min_interval = 1.0 / max(1.0, float(args.hz))
-    next_allowed_send = 0.0
-
-    # Baseline
-    prev_q: Optional[Tuple[float, float, float, float]] = None
-
-    # Accumulators
-    acc_dyaw = 0.0
-    acc_dt = 0.0
-    seq = 0
-
-    # Total angle for debugging (rad)
-    total_yaw_rad = 0.0
-
-    # Serial chunk buffer
-    serial_buffer = b""
-    # (C) Serial buffer size limit (128KB)
+    # Buffer management
+    serial_buffer = bytearray()
     MAX_BUFFER_SIZE = 128 * 1024
 
-    # Time bookkeeping: "since last successful chunk read"
-    last_success_chunk_t = time.monotonic()
+    prev_q: Optional[Tuple[float, float, float, float]] = None
+    last_success_t = time.monotonic()
 
-    if args.verbose:
-        print("[uplink] started. burst-aware integration + proportional carry-over")
-        print(f"[cfg] WINDOW_DT={WINDOW_DT:.6f}s TARGET_HZ={TARGET_HZ:.2f} yaw_scale={args.yaw_scale}")
-        print(f"[cfg] MAX_DT={MAX_DT:.3f}s HARD_RESET_DT={HARD_RESET_DT:.3f}s MAX_YAW_RATE={MAX_YAW_RATE:.2f}rad/s")
+    seq = 0
+    total_yaw = 0.0
+
+    # consecutive spike counter (for self-healing)
+    spike_streak = 0
+    SPIKE_STREAK_RESET = 8
+
+    print(f"[Uplink] Robust Integration Mode (imu_hz={args.imu_hz:.1f}Hz) -> {target[0]}:{target[1]}")
 
     try:
         while True:
-            # 1) read all available bytes (non-blocking)
-            waiting = 0
+            # ---- non-blocking read ----
             try:
                 waiting = ser.in_waiting
-            except Exception:
-                waiting = 0
-
-            if waiting <= 0:
-                time.sleep(args.poll_sleep)
-                # Still check if we need to force re-baseline due to silence
-                if time.monotonic() - last_success_chunk_t > HARD_RESET_DT:
-                    if prev_q is not None:
-                        prev_q = None
-                        # (B) Hard reset accumulator flush
-                        acc_dt = 0.0
-                        acc_dyaw = 0.0
-                    last_success_chunk_t = time.monotonic()
-                continue
-
-            try:
-                chunk = ser.read(waiting)
-                serial_buffer += chunk
-                # (C) Serial buffer protection
-                if len(serial_buffer) > MAX_BUFFER_SIZE:
-                    serial_buffer = serial_buffer[-(MAX_BUFFER_SIZE // 2):]
+                if waiting > 0:
+                    serial_buffer.extend(ser.read(waiting))
             except Exception:
                 pass
 
-            # 2) split into complete lines
+            # buffer overflow protection
+            if len(serial_buffer) > MAX_BUFFER_SIZE:
+                del serial_buffer[:len(serial_buffer) - (MAX_BUFFER_SIZE // 2)]
+
+            # no full line yet
             if b"\n" not in serial_buffer:
-                if time.monotonic() - last_success_chunk_t > HARD_RESET_DT:
+                if time.monotonic() - last_success_t > HARD_RESET_DT:
                     prev_q = None
-                    acc_dt = 0.0
-                    acc_dyaw = 0.0
+                    spike_streak = 0
                 time.sleep(args.poll_sleep)
                 continue
 
             parts = serial_buffer.split(b"\n")
-            serial_buffer = parts[-1]  # keep incomplete tail
-            raw_lines = parts[:-1]     # complete lines
+            serial_buffer = bytearray(parts[-1])
 
-            # 3) collect all valid packets in this chunk
-            q_list: List[Tuple[float, float, float, float]] = []
-            for raw in raw_lines:
-                r = raw.strip()
-                if not (r.startswith(b"#XYMU=") and r.endswith(b"#")):
+            # parse all valid quaternions
+            q_list: list[Tuple[float, float, float, float]] = []
+            for raw in parts[:-1]:
+                line = raw.strip()
+                if not (line.startswith(b"#XYMU=") and line.endswith(b"#")):
                     continue
-                line = r.decode(errors="ignore").strip()
-                q = parse_quat_from_line(line)
-                if q is not None:
-                    q_list.append(q)
+                try:
+                    d = line[6:-1].split(b",")
+                    if len(d) < 7:
+                        continue
+                    q_raw = (float(d[3]), float(d[4]), float(d[5]), float(d[6]))  # w,x,y,z
+                except Exception:
+                    continue
+
+                qn = quat_normalize(q_raw)
+                if qn is not None:
+                    q_list.append(qn)
 
             if not q_list:
                 continue
 
             now = time.monotonic()
-            total_chunk_dt = now - last_success_chunk_t
-            if total_chunk_dt < 0.0:
-                total_chunk_dt = 0.0
+            real_gap = now - last_success_t
+            last_success_t = now
 
-            # 4) hard reset if the gap is huge
-            hard_reset = (total_chunk_dt > HARD_RESET_DT) or (prev_q is None)
-            if hard_reset:
-                # (B) Hard reset flush
-                acc_dt = 0.0
-                acc_dyaw = 0.0
-                
-                # baseline reset to first packet of new burst
+            # hard reset baseline on long silence
+            if prev_q is None or real_gap > HARD_RESET_DT:
                 prev_q = q_list[0]
-                last_success_chunk_t = now
-                
-                # (A) N packets after reset -> N-1 integration steps
-                N_steps = max(1, len(q_list) - 1)
-                if total_chunk_dt > HARD_RESET_DT:
-                    dt_sample = 1.0 / TARGET_HZ
-                else:
-                    dt_sample = total_chunk_dt / N_steps if total_chunk_dt > 0 else (1.0 / TARGET_HZ)
-                start_idx = 1
-                
-                if args.verbose and total_chunk_dt > HARD_RESET_DT:
-                    print(f"[HardReset] gap={total_chunk_dt:.3f}s N={len(q_list)} steps={N_steps}")
+                spike_streak = 0
+                if len(q_list) == 1:
+                    continue
+                integration_list = q_list[1:]
             else:
-                # (A) Baseline exists, we integrate from previous prev_q to all N packets in chunk
-                N_steps = len(q_list)
-                dt_sample = total_chunk_dt / max(1, N_steps)
-                last_success_chunk_t = now
-                start_idx = 0
+                integration_list = q_list
 
-            # Avoid dt≈0 filters
-            if dt_sample < 1e-6:
-                dt_sample = 1e-6
+            # --- dt_eff for clamps: never smaller than nominal, never absurdly larger ---
+            # NOTE: this uses host time only to relax (increase) dt, not to shrink it.
+            dt_eff = max(sub_dt_nom, real_gap / max(1, len(integration_list)))
+            dt_eff = min(dt_eff, 5.0 * sub_dt_nom)  # cap: avoid over-trusting scheduler stalls
 
-            # 5) integrate all packets sequentially
-            for i in range(start_idx, len(q_list)):
-                q_now = q_list[i]
-                if prev_q is None:
-                    prev_q = q_now
+            limit = MAX_YAW_RATE * dt_eff
+            spike_threshold = 5.0 * limit
+
+            burst_dyaw = 0.0
+            burst_dt_sum = 0.0
+
+            for q_now in integration_list:
+                assert prev_q is not None
+
+                # sign flip continuity
+                if quat_dot(prev_q, q_now) < 0.0:
+                    q_now = (-q_now[0], -q_now[1], -q_now[2], -q_now[3])
+
+                dy = quat_delta_yaw(prev_q, q_now) * float(args.yaw_scale)
+
+                # spike drop: do NOT overwrite baseline with possibly corrupt q_now
+                if abs(dy) > spike_threshold:
+                    spike_streak += 1
+                    if spike_streak >= SPIKE_STREAK_RESET:
+                        prev_q = None  # force re-baseline
+                        spike_streak = 0
+                        break
                     continue
 
-                dyaw = quat_delta_yaw(prev_q, q_now) * float(args.yaw_scale)
+                spike_streak = 0
 
-                # (E) Apply yaw-rate guard using dt_sample capped at MAX_DT
-                dt_for_filter = min(dt_sample, MAX_DT)
+                # mild clamp
+                dy = max(-limit, min(dy, limit))
 
-                if abs(dyaw) > (MAX_YAW_RATE * dt_for_filter):
-                    prev_q = q_now
-                    continue
+                burst_dyaw += dy
+                burst_dt_sum += dt_eff
+                total_yaw += dy
 
-                # Accept & Accumulate
-                acc_dyaw += dyaw
-                acc_dt += dt_sample
-                total_yaw_rad += dyaw
                 prev_q = q_now
 
-                # 6) proportional drain & carry-over
-                while acc_dt >= WINDOW_DT:
-                    now_send = time.monotonic()
-                    if now_send < next_allowed_send:
-                        break
-                    
-                    if acc_dt <= 1e-9:
-                        break
-                        
-                    next_allowed_send = now_send + min_interval
-                    
-                    frac = WINDOW_DT / acc_dt
-                    dyaw_to_send = acc_dyaw * frac
+            if burst_dt_sum <= 0.0:
+                continue
 
-                    seq += 1
-                    voltage = read_voltage(args.battery_shm_path) or 0.0
+            seq += 1
+            voltage = read_voltage(args.battery_shm_path) or 0.0
 
-                    pkt = struct.pack(
-                        FMT_UPLINK,
-                        int(vehicle_id),
-                        float(voltage),
-                        float(dyaw_to_send),
-                        float(WINDOW_DT),
-                        int(seq),
-                    )
+            pkt = struct.pack(
+                FMT_UPLINK,
+                int(vehicle_id),
+                float(voltage),
+                float(burst_dyaw),
+                float(burst_dt_sum),
+                int(seq),
+            )
 
-                    try:
-                        sock.sendto(pkt, target)
-                    except Exception:
-                        seq -= 1
-                        break
+            try:
+                sock.sendto(pkt, target)
+            except Exception:
+                pass
 
-                    if args.verbose:
-                        print(f"UDP send: dψ={dyaw_to_send:+.6f} rad dt={WINDOW_DT:.6f} s")
-
-                    acc_dt -= WINDOW_DT
-                    acc_dyaw -= dyaw_to_send
-
-                    if acc_dt < 1e-9: acc_dt = 0.0
-                    if abs(acc_dyaw) < 1e-12: acc_dyaw = 0.0
+            if args.verbose:
+                print(f"[Burst] N={len(q_list)} dy={burst_dyaw:+.6f} rad dt={burst_dt_sum:.6f} (dt_eff={dt_eff:.6f})")
 
     except KeyboardInterrupt:
-        deg = total_yaw_rad * 180.0 / math.pi
-        print("\n" + "=" * 48)
-        print("[STOP] IMU telemetry sender terminated by user")
-        print(f"Total yaw: {total_yaw_rad:.6f} rad ({deg:.2f} deg)")
-        print("=" * 48)
-
+        print(f"\n[STOP] Total yaw = {total_yaw:.6f} rad ({math.degrees(total_yaw):.2f} deg)")
     finally:
-        try: ser.close()
-        except: pass
-        try: sock.close()
-        except: pass
-
+        try:
+            ser.close()
+        except Exception:
+            pass
+        try:
+            sock.close()
+        except Exception:
+            pass
+ 
 if __name__ == "__main__":
     main()
+
