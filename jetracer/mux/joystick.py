@@ -14,7 +14,6 @@ from jetracer.core.nvidia_racecar import load_config
 # UDS 설정
 # ======================
 SOCK_PATH = "/tmp/jetracer_ctrl.sock"
-udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 
 # ======================
 # Xbox 360 매핑
@@ -65,6 +64,9 @@ def find_device(target_name: str = None):
 
 
 def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=1.0, max_throttle=0.24, invert_steer=False, invert_throttle=True, hz=30.0):
+    # UDS 소켓은 함수 내에서 생성 (multiprocessing 호환)
+    udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    
     config = load_config()
     ESC_NEUTRAL = config.get("throttle", {}).get("neutral", 0.12) if config else 0.12
     log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Loaded ESC_NEUTRAL={ESC_NEUTRAL} from config"})

@@ -28,7 +28,6 @@ def parse_args():
 # UDS 설정
 # =========================
 SOCK_PATH = "/tmp/jetracer_ctrl.sock"
-udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 
 # =========================
 # UDP 설정
@@ -71,6 +70,9 @@ def speed_to_throttle(speed: float,
 
 
 def run_udp(log_queue, stop_event, speed5_throttle):
+    # UDS 소켓은 함수 내에서 생성 (multiprocessing 호환)
+    udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    
     config = load_config()
     ESC_NEUTRAL = config.get("throttle", {}).get("neutral", 0.12) if config else 0.12
     log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Loaded ESC_NEUTRAL={ESC_NEUTRAL} from config"})
