@@ -120,6 +120,20 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Remote update: SPEED_5_PHYS → {SPEED_5_PHYS:.3f}"})
                     continue
 
+                if msg.get("event") == "speed5_up":
+                    step = 0.01 if mode == "joystick" else 0.001
+                    SPEED_5_PHYS += step
+                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (+{step})"})
+                    continue
+
+                if msg.get("event") == "speed5_down":
+                    step = 0.01 if mode == "joystick" else 0.001
+                    SPEED_5_PHYS -= step
+                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (-{step})"})
+                    continue
+
                 msg["ts"] = time.time()
                 if src == "joystick":
                     last_joy = msg

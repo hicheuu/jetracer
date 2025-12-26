@@ -168,14 +168,22 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
 
                         elif event.code == THR_UP_BTN:
                             if event.value == 1 and last_thr_up == 0:
-                                current_max_throttle = clamp(current_max_throttle + 0.01, 0.0, 1.0)
-                                log_queue.put({"type": "LOG", "src": "JOY", "msg": f"[THR] max limit set to {current_max_throttle:.2f}"})
+                                # MUX에 speed5 증가 요청 전송
+                                udsock.sendto(
+                                    json.dumps({"src": "joystick", "event": "speed5_up"}).encode(),
+                                    SOCK_PATH
+                                )
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] SPEED5 +0.01"})
                             last_thr_up = event.value
 
                         elif event.code == THR_DOWN_BTN:
                             if event.value == 1 and last_thr_dn == 0:
-                                current_max_throttle = clamp(current_max_throttle - 0.01, 0.0, 1.0)
-                                log_queue.put({"type": "LOG", "src": "JOY", "msg": f"[THR] max limit set to {current_max_throttle:.2f}"})
+                                # MUX에 speed5 감소 요청 전송
+                                udsock.sendto(
+                                    json.dumps({"src": "joystick", "event": "speed5_down"}).encode(),
+                                    SOCK_PATH
+                                )
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] SPEED5 -0.01"})
                             last_thr_dn = event.value
 
                     # ---------- 축(Analog Stick) 처리 ----------
