@@ -91,6 +91,14 @@ class NvidiaRacecar(Racecar):
         
         self._last_printed_steering = None
         self._last_printed_throttle = None
+        self._last_physical_throttle = self._throttle_neutral
+
+    @property
+    def physical_throttle(self):
+        """
+        현재 ESC에 전달되고 있는 실제 물리적 스로틀 값(Neutral + Offset)을 반환합니다.
+        """
+        return self._last_physical_throttle
 
     @traitlets.observe("steering")
     def _on_steering(self, change):
@@ -125,6 +133,7 @@ class NvidiaRacecar(Racecar):
         
         # 물리적 한계 클리핑
         final_throttle = max(-1.0, min(1.0, final_throttle))
+        self._last_physical_throttle = final_throttle
         
         # 캘리브레이션용 로그 출력
         rounded_phys = round(final_throttle, 3)

@@ -162,7 +162,7 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                     log_queue.put({
                         "type": "LOG", 
                         "src": "MUX", 
-                        "msg": f"[{src_used}] steer={car.steering:+.2f} thr={car.throttle:+.3f} (norm)"
+                        "msg": f"[{src_used}] steer={car.steering:+.2f} thr={car.physical_throttle:.3f} (phys)"
                     })
                     last_log_time = now
             else:
