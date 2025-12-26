@@ -28,23 +28,23 @@ SPEED_MAX = 5.0
 
 
 def clamp(n, minn, maxn):
+    """
+    주어진 값을 최소값과 최대값 사이로 제한합니다.
+    """
     return max(min(maxn, n), minn)
 
 
 def run_udp(log_queue, stop_event):
     """
-    UDP receiver that sends abstract control commands to MUX.
+    UDP 패킷을 수신하여 추상화된 제어 명령(스티어링, 속도)으로 변환 후 MUX로 전달합니다.
     
-    UDS message format:
-    {
-        "src": "udp",
-        "steer": float,  // -1.0 to 1.0
-        "speed": float   // 0.0 to 5.0
-    }
+    수신 데이터 형식: !ffI (float steer, float speed, uint sequence)
+    MUX UDS 메시지 형식: {"src": "udp", "steer": float, "speed": float}
     """
-    # UDS 소켓은 함수 내에서 생성 (multiprocessing 호환)
+    # 전송용 UDS 소켓 생성
     udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 
+    # 수신용 UDP 소켓 생성 및 바인딩
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_IP, UDP_PORT))
     sock.setblocking(False)
@@ -55,19 +55,16 @@ def run_udp(log_queue, stop_event):
     last_rx_time = time.time()
     last_log_time = 0.0
 
-    # 마지막 유효 명령 상태
-    last_steer_cmd = 0.0
-    last_speed_cmd = 0.0
-
     try:
         while not stop_event.is_set():
             try:
+                # 비블로킹 방식으로 UDP 패킷 수신
                 data, _ = sock.recvfrom(64)
 
                 if len(data) >= 12:
                     raw_steer, raw_speed, seq = struct.unpack("!ffI", data[:12])
 
-                    # ===== speed sanity check =====
+                    # 1. 속도 유효성 검사 (NaN/Inf 및 범위 확인)
                     if not math.isfinite(raw_speed):
                         log_queue.put({"type": "LOG", "src": "UDP", "msg": "invalid speed (nan/inf), drop"})
                         continue
@@ -76,18 +73,14 @@ def run_udp(log_queue, stop_event):
                         log_queue.put({"type": "LOG", "src": "UDP", "msg": f"invalid speed={raw_speed:.3f}, drop"})
                         continue
 
-                    # ===== steering =====
+                    # 2. 스티어링 게인 적용 및 클리핑
                     steer_val = raw_steer * STEER_GAIN
                     steer_cmd = clamp(steer_val, -1.0, 1.0)
 
-                    # ===== speed (pass through) =====
+                    # 3. 속도 값 그대로 전달 (MUX에서 물리적 매핑 수행)
                     speed_cmd = raw_speed
 
-                    # 상태 갱신
-                    last_steer_cmd = steer_cmd
-                    last_speed_cmd = speed_cmd
-
-                    # ===== UDS 송신 =====
+                    # 4. MUX에 제어 메시지 송신
                     udsock.sendto(
                         json.dumps({
                             "src": "udp",
@@ -100,7 +93,7 @@ def run_udp(log_queue, stop_event):
                     last_rx_time = time.time()
                     now = time.time()
 
-                    # Throttled Logging (0.5s)
+                    # 0.5초 주기로 로그 출력
                     if now - last_log_time > 0.5:
                          log_queue.put({
                              "type": "LOG",
@@ -114,10 +107,10 @@ def run_udp(log_queue, stop_event):
             except struct.error as e:
                  log_queue.put({"type": "LOG", "src": "UDP", "msg": f"struct error: {e}"})
 
-            # ===== watchdog (제어 개입 금지) =====
+            # Watchdog: 일정 시간 동안 수신이 없으면 경고
             if time.time() - last_rx_time > WATCHDOG_TIMEOUT:
                 last_rx_time = time.time()
-                log_queue.put({"type": "LOG", "src": "UDP", "msg": "watchdog (no control override)"})
+                log_queue.put({"type": "LOG", "src": "UDP", "msg": "watchdog timer triggered"})
 
             time.sleep(0.005)
 
