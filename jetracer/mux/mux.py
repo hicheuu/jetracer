@@ -4,6 +4,8 @@ import time
 import os
 import multiprocessing
 import argparse
+import csv
+from datetime import datetime
 
 from jetracer.core import NvidiaRacecar
 
@@ -61,7 +63,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_mux(log_queue, stop_event, speed5_throttle):
+def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
     # 기존 소켓 제거
     if os.path.exists(SOCK_PATH):
         try:
@@ -82,6 +84,18 @@ def run_mux(log_queue, stop_event, speed5_throttle):
     SPEED_5_PHYS = speed5_throttle
     SPEED_1_PHYS = SPEED_5_PHYS - 0.01  
     
+    # 캐리브레이션 로깅 설정
+    csv_file = None
+    csv_writer = None
+    if log_calibration:
+        os.makedirs("logs", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = f"logs/calibration_{timestamp}.csv"
+        csv_file = open(log_path, 'w', newline='')
+        csv_writer = csv.writer(csv_file)
+        csv_writer.writerow(["timestamp", "type", "value", "direction"]) # 헤더
+        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Calibration logging enabled: {log_path}"})
+
     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Mapped Speed Mapping: Neutral={ESC_NEUTRAL:.3f}, Gain={THR_GAIN:.2f}"})
     
     car.steering = 0.0
@@ -125,6 +139,8 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                     SPEED_5_PHYS += step
                     SPEED_1_PHYS = SPEED_5_PHYS - 0.01
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (+{step})"})
+                    if csv_writer:
+                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "+"])
                     continue
 
                 if msg.get("event") == "speed5_down":
@@ -132,6 +148,8 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                     SPEED_5_PHYS -= step
                     SPEED_1_PHYS = SPEED_5_PHYS - 0.01
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (-{step})"})
+                    if csv_writer:
+                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-"])
                     continue
 
                 msg["ts"] = time.time()
@@ -139,6 +157,8 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                     last_joy = msg
                 elif src == "udp":
                     last_udp = msg
+                    if csv_writer and "speed" in msg:
+                        csv_writer.writerow([time.time(), "speed", msg["speed"], ""])
 
             except BlockingIOError:
                 pass
@@ -214,6 +234,8 @@ def run_mux(log_queue, stop_event, speed5_throttle):
         car.steering = 0.0
         car.throttle = 0.0
         sock.close()
+        if csv_file:
+            csv_file.close()
         if os.path.exists(SOCK_PATH):
             os.unlink(SOCK_PATH)
         log_queue.put({"type": "LOG", "src": "MUX", "msg": "stopped"})

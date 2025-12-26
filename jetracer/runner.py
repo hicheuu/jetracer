@@ -20,7 +20,7 @@ def runner(args):
     # 1. MUX 프로세스 (중심 제어 루프)
     p_mux = multiprocessing.Process(
         target=run_mux, 
-        args=(log_queue, stop_event, args.speed5_throttle)
+        args=(log_queue, stop_event, args.speed5_throttle, args.log_calibration)
     )
     p_mux.start()
 
@@ -112,6 +112,7 @@ if __name__ == "__main__":
     parser.add_argument("--speed5-throttle", type=float, default=0.20, help="초기 물리적 스로틀 목표값 (조이스틱 RB/LB로 0.001 단위 조절 가능)")
     parser.add_argument("--device", default=None, help="조이스틱 장치 경로 (예: /dev/input/event2)")
     parser.add_argument("--steer-scale", type=float, default=1.0, help="조이스틱 조향 배율")
+    parser.add_argument("--log-calibration", action="store_true", help="속도 캘리브레이션용 데이터 로깅 활성화")
     
     args = parser.parse_args()
     
