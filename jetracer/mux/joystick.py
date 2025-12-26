@@ -63,7 +63,7 @@ def find_device(target_name: str = None):
 
 
 
-def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=1.0, max_throttle=0.24, invert_steer=False, invert_throttle=True, hz=30.0):
+def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=1.0, max_throttle=0.24, max_throttle_limit=0.5, invert_steer=False, invert_throttle=True, hz=30.0):
     # UDS 소켓은 함수 내에서 생성 (multiprocessing 호환)
     udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     
@@ -189,7 +189,7 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
 
                         elif event.code == THR_UP_BTN:
                             if event.value == 1 and last_thr_up == 0:
-                                current_max_throttle = clamp(current_max_throttle + 0.01, 0.0, 1.0)
+                                current_max_throttle = clamp(current_max_throttle + 0.01, 0.0, max_throttle_limit)
                                 log_queue.put({"type": "LOG", "src": "JOY", "msg": f"[THR] max_throttle ↑ {current_max_throttle:.2f}"})
                             last_thr_up = event.value
 
@@ -245,6 +245,7 @@ def main():
     ap.add_argument("--deadzone", type=float, default=0.08)
     ap.add_argument("--steer-scale", type=float, default=1.0)
     ap.add_argument("--max-throttle", type=float, default=0.24)
+    ap.add_argument("--max-throttle-limit", type=float, default=0.5, help="RB로 조절 가능한 throttle 상한선")
     ap.add_argument("--invert-steer", action="store_true")
     ap.add_argument("--invert-throttle", action="store_true", default=True)
     ap.add_argument("--hz", type=float, default=30.0)
@@ -264,6 +265,7 @@ def main():
             deadzone=args.deadzone,
             steer_scale=args.steer_scale,
             max_throttle=args.max_throttle,
+            max_throttle_limit=args.max_throttle_limit,
             invert_steer=args.invert_steer,
             invert_throttle=args.invert_throttle,
             hz=args.hz
