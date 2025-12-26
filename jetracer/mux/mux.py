@@ -17,47 +17,41 @@ SOCK_PATH = "/tmp/jetracer_ctrl.sock"
 # 타임아웃 설정
 # =========================
 JOY_TIMEOUT = 0.5
-UDP_TIMEOUT = 1.2   # ← UDP watchdog보다 살짝 큼
+UDP_TIMEOUT = 1.2
 
 # =========================
-# 속도 → 스로틀 변환 파라미터
+# 속도 → 노멀라이즈 스로틀 변환
 # =========================
-MAX_THROTTLE = 0.36
-
-
-def clamp(n, minn, maxn):
-    return max(min(maxn, n), minn)
-
-
-def speed_to_throttle(speed: float,
-                      speed1_thr: float,
-                      speed5_thr: float,
-                      neutral: float) -> float:
+def norm_speed_to_throttle(speed: float) -> float:
     """
-    Convert abstract speed (0.0 ~ 5.0) to physical throttle value.
+    Convert absolute speed (0.0 ~ 5.0) to normalized throttle (0.0 ~ 1.0).
+    Note: The actual physical mapping (gain, neutral) is handled by NvidiaRacecar.
     """
     if speed <= 0.0:
-        return neutral
-
-    slope = (speed5_thr - speed1_thr) / (5.0 - 1.0)
-    intercept = speed1_thr - slope * 1.0
-
-    throttle = slope * speed + intercept
-    return clamp(throttle, neutral, neutral + MAX_THROTTLE)
+        return 0.0
+    
+    # 단순 선형 매핑 예시 (0.0 ~ 5.0 -> 0.0 ~ 1.0)
+    # 필요에 따라 비선형 매핑이나 정밀 보간을 사용할 수 있음.
+    normalized = speed / 5.0
+    return max(0.0, min(1.0, normalized))
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    # speed5-throttle은 이제 NvidiaRacecar의 gain으로 흡수되거나 
+    # MUX에서 전체적인 스케일링 용도로 사용할 수 있음.
+    # 여기서는 호환성을 위해 유지하거나 제거할 수 있음. 
+    # 일단 '최대 스피드 가중치' 정도로 이해하고 유지.
     parser.add_argument(
-        "--speed5-throttle",
+        "--max-speed",
         type=float,
-        required=True,
-        help="Throttle value corresponding to speed=5.0"
+        default=5.0,
+        help="Speed value that maps to 1.0 normalized throttle"
     )
     return parser.parse_args()
 
 
-def run_mux(log_queue, stop_event, speed5_throttle):
+def run_mux(log_queue, stop_event, max_speed):
     # 소켓 초기화
     if os.path.exists(SOCK_PATH):
         try:
@@ -69,29 +63,21 @@ def run_mux(log_queue, stop_event, speed5_throttle):
     sock.bind(SOCK_PATH)
     sock.setblocking(False)
 
+    # NvidiaRacecar는 이제 -1.0 ~ 1.0의 표준 입력을 받음
     car = NvidiaRacecar()
-    ESC_NEUTRAL = car._throttle_neutral
     
-    # speed → throttle 매핑 파라미터
-    SPEED_5_THROTTLE = speed5_throttle
-    SPEED_1_THROTTLE = SPEED_5_THROTTLE - 0.01  # ⭐ 자동 계산
-    
-    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Loaded ESC_NEUTRAL={ESC_NEUTRAL} from config"})
-    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"speed=1 -> thr={SPEED_1_THROTTLE:.3f}, speed=5 -> thr={SPEED_5_THROTTLE:.3f}"})
+    log_queue.put({"type": "LOG", "src": "MUX", "msg": "Started with Normalized Control Architecture"})
     
     car.steering = 0.0
-    car.throttle = ESC_NEUTRAL
+    car.throttle = 0.0
 
-    mode = "joystick"   # joystick | udp
+    mode = "joystick"
     estop = False
 
     last_joy = None
     last_udp = None
-    
     last_log_time = 0.0
 
-    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"started | mode={mode}"})
-    # Initial mode update
     log_queue.put({"type": "MODE", "mode": mode})
 
     try:
@@ -102,9 +88,7 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                 msg = json.loads(data.decode())
                 src = msg.get("src")
 
-                # 이벤트
                 if msg.get("event") == "toggle":
-                    # MUX decides mode toggling
                     mode = "udp" if mode == "joystick" else "joystick"
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"MODE → {mode}"})
                     log_queue.put({"type": "MODE", "mode": mode})
@@ -115,7 +99,6 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"ESTOP {'ON' if estop else 'OFF'}"})
                     continue
 
-                # 명령
                 msg["ts"] = time.time()
                 if src == "joystick":
                     last_joy = msg
@@ -129,10 +112,9 @@ def run_mux(log_queue, stop_event, speed5_throttle):
 
             now = time.time()
 
-            # ===== estop =====
             if estop:
                 car.steering = 0.0
-                car.throttle = ESC_NEUTRAL
+                car.throttle = 0.0
                 time.sleep(0.01)
                 continue
 
@@ -149,40 +131,31 @@ def run_mux(log_queue, stop_event, speed5_throttle):
             if cmd:
                 car.steering = cmd["steer"]
                 
-                # ===== throttle 처리 =====
                 if "speed" in cmd:
-                    # UDP에서 온 speed → throttle 변환
-                    car.throttle = speed_to_throttle(
-                        cmd["speed"],
-                        SPEED_1_THROTTLE,
-                        SPEED_5_THROTTLE,
-                        ESC_NEUTRAL
-                    )
+                    # UDP speed -> Normalized Throttle (0.0 ~ 1.0)
+                    car.throttle = cmd["speed"] / max_speed
                 else:
-                    # Joystick에서 온 throttle 직접 사용
+                    # Joystick Normalized Throttle (-1.0 ~ 1.0)
                     car.throttle = cmd["throttle"]
                 
-                # Log throttling (0.5s)
                 if now - last_log_time > 0.5:
                     log_queue.put({
                         "type": "LOG", 
                         "src": "MUX", 
-                        "msg": f"{src_used} steer={cmd['steer']:+.3f} thr={car.throttle:.3f}"
+                        "msg": f"{src_used} steer={car.steering:+.2f} thr={car.throttle:+.2f} (norm)"
                     })
                     last_log_time = now
             else:
                 car.steering = 0.0
-                car.throttle = ESC_NEUTRAL
+                car.throttle = 0.0
 
             time.sleep(0.01)
 
     except KeyboardInterrupt:
         pass
-    except Exception as e:
-         log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Exception: {e}"})
     finally:
         car.steering = 0.0
-        car.throttle = ESC_NEUTRAL
+        car.throttle = 0.0
         sock.close()
         if os.path.exists(SOCK_PATH):
             os.unlink(SOCK_PATH)
@@ -192,7 +165,6 @@ def run_mux(log_queue, stop_event, speed5_throttle):
 if __name__ == "__main__":
     args = parse_args()
     
-    # Simple print wrapper for standalone
     class PrintQueue:
         def put(self, item):
             if item.get("type") == "LOG":
@@ -202,6 +174,6 @@ if __name__ == "__main__":
 
     stop = multiprocessing.Event()
     try:
-        run_mux(PrintQueue(), stop, args.speed5_throttle)
+        run_mux(PrintQueue(), stop, args.max_speed)
     except KeyboardInterrupt:
         stop.set()

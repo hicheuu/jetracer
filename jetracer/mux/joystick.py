@@ -3,12 +3,8 @@ import time
 import json
 import socket
 import threading
-import sys
 from evdev import InputDevice, ecodes, list_devices
-import os
 import multiprocessing
-
-from jetracer.core.nvidia_racecar import load_config
 
 # ======================
 # UDS 설정
@@ -41,15 +37,10 @@ def norm_axis(val, lo, hi):
 
 
 def find_device(target_name: str = None):
-    """
-    Available devices 중에서 이름에 target_name이 포함된 장치를 찾습니다.
-    target_name이 없으면 'Xbox', 'Gamepad', 'Controller' 등의 키워드로 검색합니다.
-    """
     devices = [InputDevice(path) for path in list_devices()]
     if not devices:
         return None
 
-    # 우선순위 키워드
     keywords = ["Xbox", "Gamepad", "Controller"]
     if target_name:
         keywords = [target_name]
@@ -62,56 +53,39 @@ def find_device(target_name: str = None):
     return None
 
 
-
-def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=1.0, max_throttle=0.24, max_throttle_limit=0.5, invert_steer=False, invert_throttle=True, hz=30.0):
+def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=1.0, max_throttle=0.3, invert_steer=False, invert_throttle=True, hz=30.0):
     # UDS 소켓은 함수 내에서 생성 (multiprocessing 호환)
     udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     
-    config = load_config()
-    ESC_NEUTRAL = config.get("throttle", {}).get("neutral", 0.12) if config else 0.12
-    log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Loaded ESC_NEUTRAL={ESC_NEUTRAL} from config"})
-    REVERSE_START = -0.1
+    log_queue.put({"type": "LOG", "src": "JOY", "msg": "Started with Normalized Control Architecture"})
 
     device_path = device
-
-    # Auto-detect if device not specified
     if device_path is None:
-        log_queue.put({"type": "LOG", "src": "JOY", "msg": "No device specified, attempting auto-detection..."})
+        log_queue.put({"type": "LOG", "src": "JOY", "msg": "Auto-detecting device..."})
         detected = find_device()
         if detected:
             device_path = detected
-            log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Auto-detected device: {device_path}"})
         else:
-            # Fallback default
             device_path = "/dev/input/event2"
-            log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Check failed. Using fallback: {device_path}"})
+            log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Using fallback: {device_path}"})
 
     try:
         dev = InputDevice(device_path)
         log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Using device: {dev.path} ({dev.name})"})
-    except FileNotFoundError:
-        log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Error: Device not found at {device_path}"})
-        return
-    except PermissionError:
-        log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Error: Permission denied for {device_path}. Check udev rules or use sudo."})
+    except Exception as e:
+        log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Error opening device: {e}"})
         return
 
     # ======================
     # 상태 변수
     # ======================
-    steer = 0.0
-    thr = 0.0
-
     steer_cmd = 0.0
-    throttle_cmd = 0.12
-
-    # max_throttle variable shadows the argument, but Python allows this. 
-    # To be cleaner, let's use current_max_throttle
+    throttle_cmd = 0.0
     current_max_throttle = max_throttle
 
     last_toggle = 0
-    last_toggle_time = 0.0  # Debounce timer
-    TOGGLE_DEBOUNCE = 0.5   # 0.5초간 재토글 방지
+    last_toggle_time = 0.0
+    TOGGLE_DEBOUNCE = 0.5
     
     last_stop = 0
     last_thr_up = 0
@@ -145,13 +119,7 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
     # evdev 이벤트 루프
     # ======================
     try:
-        # We need to mix non-blocking read with stop_event check or just rely on daemon thread termination?
-        # evdev read_loop is blocking. We can use select or just rely on the fact that if the main process kills us, we die.
-        # But 'stop_event' implies cooperative shutdown.
-        # To do cooperative shutdown with evdev, access the fd or use read_one() with timeout.
-        
         while not stop_event.is_set():
-            # Read events non-blocking
             events = []
             try:
                 for event in dev.read():
@@ -189,49 +157,35 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
 
                         elif event.code == THR_UP_BTN:
                             if event.value == 1 and last_thr_up == 0:
-                                current_max_throttle = clamp(current_max_throttle + 0.01, 0.0, max_throttle_limit)
-                                log_queue.put({"type": "LOG", "src": "JOY", "msg": f"[THR] max_throttle ↑ {current_max_throttle:.2f}"})
+                                current_max_throttle = clamp(current_max_throttle + 0.05, 0.0, 1.0)
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": f"[THR] max_limit ↑ {current_max_throttle:.2f}"})
                             last_thr_up = event.value
 
                         elif event.code == THR_DOWN_BTN:
                             if event.value == 1 and last_thr_dn == 0:
-                                current_max_throttle = clamp(current_max_throttle - 0.01, 0.0, 1.0)
-                                log_queue.put({"type": "LOG", "src": "JOY", "msg": f"[THR] max_throttle ↓ {current_max_throttle:.2f}"})
+                                current_max_throttle = clamp(current_max_throttle - 0.05, 0.0, 1.0)
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": f"[THR] max_limit ↓ {current_max_throttle:.2f}"})
                             last_thr_dn = event.value
 
                     # ---------- 축 ----------
                     elif event.type == ecodes.EV_ABS:
                         if event.code == STEER_AXIS:
-                            steer = apply_deadzone(
-                                norm_axis(event.value, -32768, 32767),
-                                deadzone
-                            )
-                            if invert_steer:
-                                steer = -steer
+                            raw_norm = norm_axis(event.value, -32768, 32767)
+                            val = apply_deadzone(raw_norm, deadzone)
+                            if invert_steer: val = -val
+                            steer_cmd = clamp(val * steer_scale)
 
                         elif event.code == THROTTLE_AXIS:
-                            thr = apply_deadzone(
-                                norm_axis(event.value, -32768, 32767),
-                                deadzone
-                            )
-                            if invert_throttle:
-                                thr = -thr
-
-                    # ---------- 최종 명령 ----------
-                    if thr > 0:
-                        throttle_cmd = ESC_NEUTRAL + thr * current_max_throttle
-                    elif thr < 0:
-                        throttle_cmd = REVERSE_START + thr * abs(REVERSE_START)
-                    else:
-                        throttle_cmd = ESC_NEUTRAL
-
-                    throttle_cmd = clamp(throttle_cmd, -1.0, 1.0)
-                    steer_cmd = clamp(steer * steer_scale)
+                            raw_norm = norm_axis(event.value, -32768, 32767)
+                            val = apply_deadzone(raw_norm, deadzone)
+                            if invert_throttle: val = -val
+                            # Normalized throttle output (-1.0 to 1.0)
+                            throttle_cmd = clamp(val * current_max_throttle)
 
     except KeyboardInterrupt:
         pass
-    except OSError:
-        log_queue.put({"type": "LOG", "src": "JOY", "msg": "Device disconnected"})
+    except Exception as e:
+        log_queue.put({"type": "LOG", "src": "JOY", "msg": f"Exception: {e}"})
     finally:
         running = False
         log_queue.put({"type": "LOG", "src": "JOY", "msg": "stopping"})
@@ -240,12 +194,11 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
 
 
 def main():
-    ap = argparse.ArgumentParser(description="evdev joystick (direct throttle limit)")
-    ap.add_argument("--device", default=None, help="Path to input device (e.g. /dev/input/event0). If not set, auto-detect.")
+    ap = argparse.ArgumentParser(description="evdev joystick (Normalized Output)")
+    ap.add_argument("--device", default=None)
     ap.add_argument("--deadzone", type=float, default=0.08)
     ap.add_argument("--steer-scale", type=float, default=1.0)
-    ap.add_argument("--max-throttle", type=float, default=0.24)
-    ap.add_argument("--max-throttle-limit", type=float, default=0.5, help="RB로 조절 가능한 throttle 상한선")
+    ap.add_argument("--max-throttle", type=float, default=0.3)
     ap.add_argument("--invert-steer", action="store_true")
     ap.add_argument("--invert-throttle", action="store_true", default=True)
     ap.add_argument("--hz", type=float, default=30.0)
@@ -258,18 +211,7 @@ def main():
 
     stop = multiprocessing.Event()
     try:
-        run_joystick(
-            PrintQueue(), 
-            stop,
-            device=args.device,
-            deadzone=args.deadzone,
-            steer_scale=args.steer_scale,
-            max_throttle=args.max_throttle,
-            max_throttle_limit=args.max_throttle_limit,
-            invert_steer=args.invert_steer,
-            invert_throttle=args.invert_throttle,
-            hz=args.hz
-        )
+        run_joystick(PrintQueue(), stop, **vars(args))
     except KeyboardInterrupt:
         stop.set()
 

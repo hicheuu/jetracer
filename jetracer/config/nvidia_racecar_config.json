@@ -1,25 +1,15 @@
-
 {
-    "i2c_address": 64,
-    "steering": {
-      "gain": -0.65,
-      "offset": -0.0,
-      "channel": 1
-    },
-    "throttle": {
-      "gain": 0.8,
-      "offset": 0.0,
-      "channel": 0,
-      "neutral": 0.21
-    },
-    "voltage_compensation": {
-      "enabled": true,
-      "reference_voltage": 8.2,
-      "ema_alpha": 0.1,
-      "gain_min": 1.05,
-      "gain_max": 1.15
-    },
-    "input_to_ms": 2.0
-  }
-  
-  
+  "i2c_address": 64,
+  "steering": {
+    "gain": -0.65,
+    "offset": 0.0,
+    "channel": 1
+  },
+  "throttle": {
+    "gain": 0.8,
+    "offset": 0.0,
+    "channel": 0,
+    "neutral": 0.21
+  },
+  "input_to_ms": 2.0
+}
