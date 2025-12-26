@@ -6,7 +6,7 @@
     "channel": 1
   },
   "throttle": {
-    "gain": 0.8,
+    "gain": 1.0,
     "channel": 0,
     "neutral": 0.21
   },
