@@ -3,26 +3,7 @@ import struct
 import time
 import json
 import math
-import argparse
 import multiprocessing
-import os
-import sys
-
-from jetracer.core.nvidia_racecar import load_config
-
-# =========================
-# CLI 인자
-# =========================
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--speed5-throttle",
-        type=float,
-        required=True,
-        help="Throttle value corresponding to speed=5.0"
-    )
-    return parser.parse_args()
-
 
 # =========================
 # UDS 설정
@@ -39,9 +20,6 @@ UDP_PORT = 5555
 # 제어 파라미터
 # =========================
 STEER_GAIN = 2.0
-
-MAX_THROTTLE = 0.36
-
 WATCHDOG_TIMEOUT = 1.0
 
 # speed 유효 범위 (⭐ 핵심 안전장치)
@@ -53,46 +31,33 @@ def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
-
-
-def speed_to_throttle(speed: float,
-                      speed1_thr: float,
-                      speed5_thr: float,
-                      neutral: float) -> float:
-    if speed <= 0.0:
-        return neutral
-
-    slope = (speed5_thr - speed1_thr) / (5.0 - 1.0)
-    intercept = speed1_thr - slope * 1.0
-
-    throttle = slope * speed + intercept
-    return clamp(throttle, neutral, neutral + MAX_THROTTLE)
-
-
-def run_udp(log_queue, stop_event, speed5_throttle):
+def run_udp(log_queue, stop_event):
+    """
+    UDP receiver that sends abstract control commands to MUX.
+    
+    UDS message format:
+    {
+        "src": "udp",
+        "steer": float,  // -1.0 to 1.0
+        "speed": float   // 0.0 to 5.0
+    }
+    """
     # UDS 소켓은 함수 내에서 생성 (multiprocessing 호환)
     udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    
-    config = load_config()
-    ESC_NEUTRAL = config.get("throttle", {}).get("neutral", 0.12) if config else 0.12
-    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Loaded ESC_NEUTRAL={ESC_NEUTRAL} from config"})
-    
-    SPEED_5_THROTTLE = speed5_throttle
-    SPEED_1_THROTTLE = SPEED_5_THROTTLE - 0.01  # ⭐ 자동 계산
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_IP, UDP_PORT))
     sock.setblocking(False)
 
     log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Listening on {UDP_IP}:{UDP_PORT}"})
-    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"format=!ffI | speed=1 -> thr={SPEED_1_THROTTLE:.3f}, speed=5 -> thr={SPEED_5_THROTTLE:.3f}"})
+    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"format=!ffI | speed range=[{SPEED_MIN}, {SPEED_MAX}]"})
 
     last_rx_time = time.time()
     last_log_time = 0.0
 
     # 마지막 유효 명령 상태
     last_steer_cmd = 0.0
-    last_throttle_cmd = ESC_NEUTRAL
+    last_speed_cmd = 0.0
 
     try:
         while not stop_event.is_set():
@@ -115,25 +80,19 @@ def run_udp(log_queue, stop_event, speed5_throttle):
                     steer_val = raw_steer * STEER_GAIN
                     steer_cmd = clamp(steer_val, -1.0, 1.0)
 
-                    # ===== throttle =====
-                    throttle_cmd = speed_to_throttle(
-                        raw_speed,
-                        SPEED_1_THROTTLE,
-                        SPEED_5_THROTTLE,
-                        ESC_NEUTRAL
-                    )
-
+                    # ===== speed (pass through) =====
+                    speed_cmd = raw_speed
 
                     # 상태 갱신
                     last_steer_cmd = steer_cmd
-                    last_throttle_cmd = throttle_cmd
+                    last_speed_cmd = speed_cmd
 
                     # ===== UDS 송신 =====
                     udsock.sendto(
                         json.dumps({
                             "src": "udp",
                             "steer": steer_cmd,
-                            "throttle": throttle_cmd
+                            "speed": speed_cmd
                         }).encode(),
                         SOCK_PATH
                     )
@@ -146,7 +105,7 @@ def run_udp(log_queue, stop_event, speed5_throttle):
                          log_queue.put({
                              "type": "LOG",
                              "src": "UDP",
-                             "msg": f"seq={seq:<5} speed={raw_speed:.2f} -> thr={throttle_cmd:.3f} steer={steer_cmd:+.3f}"
+                             "msg": f"seq={seq:<5} speed={speed_cmd:.2f} steer={steer_cmd:+.3f}"
                          })
                          last_log_time = now
 
@@ -171,8 +130,6 @@ def run_udp(log_queue, stop_event, speed5_throttle):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    
     class PrintQueue:
         def put(self, item):
             if item.get("type") == "LOG":
@@ -180,6 +137,6 @@ if __name__ == "__main__":
 
     stop = multiprocessing.Event()
     try:
-        run_udp(PrintQueue(), stop, args.speed5_throttle)
+        run_udp(PrintQueue(), stop)
     except KeyboardInterrupt:
         stop.set()
