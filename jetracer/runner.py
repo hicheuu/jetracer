@@ -5,9 +5,12 @@ import argparse
 import sys
 import os
 
-from jetracer.mux.mux import run_mux
+from jetracer.mux.mux import run_mux, SOCK_PATH
 from jetracer.mux.joystick import run_joystick
 from jetracer.mux.udp_recv import run_udp
+import socket
+import json
+import msvcrt
 
 def runner(args):
     """
@@ -45,55 +48,85 @@ def runner(args):
     )
     p_udp.start()
 
-    print("[RUNNER] 모든 제어 프로세스가 시작되었습니다. Ctrl+C를 눌러 종료하세요.")
+    print("[RUNNER] 모든 제어 프로세스가 시작되었습니다.")
+    print("[RUNNER] {Up Arrow}: Throttle +0.001 | {Down Arrow}: Throttle -0.001")
+    print("[RUNNER] Ctrl+C를 눌러 종료하세요.")
     
     current_mode = "joystick" # 초기 기본 모드
+    speed5_phys = args.speed5_throttle
+
+    # MUX 전송용 유닉스 소켓
+    runner_sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 
     try:
         while True:
-            try:
-                # 0.1초 대기하며 로그 큐 확인
-                record = log_queue.get(timeout=0.1)
-                
-                # 모드 전환 이벤트 처리
-                if record.get("type") == "MODE":
-                    current_mode = record["mode"]
-                    continue
+            # 1. 키보드 입력 처리 (Windows - msvcrt)
+            if msvcrt.kbhit():
+                key = msvcrt.getch()
+                # 화살표 키 처리 (보통 0xE0 또는 0x00 뒤에 코드가 옴)
+                if key in [b'\xe0', b'\x00']:
+                    sub_key = msvcrt.getch()
+                    changed = False
+                    if sub_key == b'H': # Up
+                        speed5_phys += 0.001
+                        changed = True
+                    elif sub_key == b'P': # Down
+                        speed5_phys -= 0.001
+                        changed = True
+                    
+                    if changed:
+                        try:
+                            # MUX에 업데이트 메시지 전송
+                            update_msg = {
+                                "src": "runner",
+                                "event": "update_speed5",
+                                "val": speed5_phys
+                            }
+                            runner_sock.sendto(json.dumps(update_msg).encode(), SOCK_PATH)
+                            print(f"\r[RUNNER] SPEED5_THROTTLE UPDATED: {speed5_phys:.3f}", end="")
+                        except Exception as e:
+                            print(f"\n[RUNNER] Send error: {e}")
 
-                # 로그 출력 (현재 선택된 모드에 따라 필터링)
-                if record.get("type") == "LOG":
-                    src = record["src"]
-                    msg = record["msg"]
+            # 2. 로그 큐 비우기 (최대한 빨리 처리하여 렉 유발 방지)
+            while not log_queue.empty():
+                try:
+                    record = log_queue.get_nowait()
                     
-                    should_print = False
-                    
-                    # MUX 로그는 항상 출력
-                    if src == "MUX":
-                        should_print = True
+                    if record.get("type") == "MODE":
+                        current_mode = record["mode"]
+                        continue
+
+                    if record.get("type") == "LOG":
+                        src = record["src"]
+                        msg = record["msg"]
                         
-                    # 현재 활성화된 입력 소스의 로그만 출력 (에러 제외)
-                    elif src == "JOY":
-                        if current_mode == "joystick":
+                        should_print = False
+                        if src == "MUX":
                             should_print = True
-                        elif "Error" in msg or "Device" in msg or "stopping" in msg:
-                            should_print = True
+                        elif src == "JOY":
+                            if current_mode == "joystick":
+                                should_print = True
+                            elif any(k in msg for k in ["Error", "Device", "stopping"]):
+                                should_print = True
+                        elif src == "UDP":
+                            if current_mode == "udp":
+                                should_print = True
+                            elif "Error" in msg or "stopping" in msg:
+                                should_print = True
 
-                    elif src == "UDP":
-                        if current_mode == "udp":
-                            should_print = True
-                        elif "Error" in msg or "stopping" in msg:
-                            should_print = True
+                        if should_print:
+                            # \r를 사용하여 업데이트 로그와 겹치지 않게 처리
+                            print(f"\n[{src}] {msg}")
 
-                    if should_print:
-                        print(f"[{src}] {msg}")
-
-            except multiprocessing.queues.Empty:
-                pass
+                except Exception:
+                    break
             
             # 메인 프로세스 생존 확인
             if not p_mux.is_alive():
-                print("[RUNNER] MUX 프로세스가 예기치 않게 종료되었습니다.")
+                print("\n[RUNNER] MUX 프로세스가 예기치 않게 종료되었습니다.")
                 break
+                
+            time.sleep(0.01) # CPU 점유율 조절
                 
     except KeyboardInterrupt:
         print("\n[RUNNER] 종료 중...")

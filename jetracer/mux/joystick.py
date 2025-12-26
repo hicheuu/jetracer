@@ -190,8 +190,9 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
                             raw_norm = norm_axis(event.value, -32768, 32767)
                             val = apply_deadzone(raw_norm, deadzone)
                             if invert_throttle: val = -val
-                            # 정규화된 출력 산출 (-1.0 ~ 1.0)
-                            throttle_cmd = clamp(val * current_max_throttle)
+                            # 이제 MUX에서 물리적 타겟팅을 수행하므로, 
+                            # 조이스틱은 순수한 정규화 범위(-1.0 ~ 1.0)만 전송합니다.
+                            throttle_cmd = clamp(val)
 
     except KeyboardInterrupt:
         pass

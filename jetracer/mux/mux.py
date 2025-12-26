@@ -114,6 +114,12 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"ESTOP {'ON' if estop else 'OFF'}"})
                     continue
 
+                if msg.get("event") == "update_speed5":
+                    SPEED_5_PHYS = msg["val"]
+                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Remote update: SPEED_5_PHYS → {SPEED_5_PHYS:.3f}"})
+                    continue
+
                 msg["ts"] = time.time()
                 if src == "joystick":
                     last_joy = msg
@@ -156,7 +162,24 @@ def run_mux(log_queue, stop_event, speed5_throttle):
                         THR_GAIN
                     )
                 else:
-                    car.throttle = cmd["throttle"]
+                    # 조이스틱 입력 (-1.0 ~ 1.0) 처리
+                    # 조이스틱의 1.0(최대)이 SPEED_5_PHYS에 도달하도록 스케일링
+                    # speed_to_normalized_throttle 함수는 0~5 범위를 받으므로 
+                    # 조이스틱 입력을 0~5 범위로 매핑하여 재활용
+                    joy_throttle = cmd["throttle"]
+                    if joy_throttle > 0:
+                        # 0.0~1.0 조이스틱 입력을 0.0~5.0 속도로 변환하여 동일한 물리 타겟팅 적용
+                        virtual_speed = joy_throttle * 5.0
+                        car.throttle = speed_to_normalized_throttle(
+                            virtual_speed,
+                            SPEED_1_PHYS,
+                            SPEED_5_PHYS,
+                            ESC_NEUTRAL,
+                            THR_GAIN
+                        )
+                    else:
+                        # 후진은 아직 단순 비례 (필요 시 수정 가능)
+                        car.throttle = joy_throttle
                 
                 if now - last_log_time > 0.5:
                     log_queue.put({
