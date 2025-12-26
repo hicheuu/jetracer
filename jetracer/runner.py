@@ -10,7 +10,37 @@ from jetracer.mux.joystick import run_joystick
 from jetracer.mux.udp_recv import run_udp
 import socket
 import json
-import msvcrt
+
+# OS 호환성을 위한 키보드 입력 핸들러
+if os.name == 'nt':
+    import msvcrt
+    def get_key():
+        if msvcrt.kbhit():
+            ch = msvcrt.getch()
+            if ch in [b'\xe0', b'\x00']:
+                sub = msvcrt.getch()
+                if sub == b'H': return 'UP'
+                if sub == b'P': return 'DOWN'
+            return ch.decode() if isinstance(ch, bytes) else ch
+        return None
+else:
+    import select
+    import termios
+    import tty
+    def get_key():
+        if select.select([sys.stdin], [], [], 0) == ([sys.stdin], [], []):
+            old_settings = termios.tcgetattr(sys.stdin)
+            try:
+                tty.setcbreak(sys.stdin.fileno())
+                ch = sys.stdin.read(1)
+                if ch == '\x1b':
+                    extra = sys.stdin.read(2)
+                    if extra == '[A': return 'UP'
+                    if extra == '[B': return 'DOWN'
+                return ch
+            finally:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        return None
 
 def runner(args):
     """
@@ -60,32 +90,29 @@ def runner(args):
 
     try:
         while True:
-            # 1. 키보드 입력 처리 (Windows - msvcrt)
-            if msvcrt.kbhit():
-                key = msvcrt.getch()
-                # 화살표 키 처리 (보통 0xE0 또는 0x00 뒤에 코드가 옴)
-                if key in [b'\xe0', b'\x00']:
-                    sub_key = msvcrt.getch()
-                    changed = False
-                    if sub_key == b'H': # Up
-                        speed5_phys += 0.001
-                        changed = True
-                    elif sub_key == b'P': # Down
-                        speed5_phys -= 0.001
-                        changed = True
-                    
-                    if changed:
-                        try:
-                            # MUX에 업데이트 메시지 전송
-                            update_msg = {
-                                "src": "runner",
-                                "event": "update_speed5",
-                                "val": speed5_phys
-                            }
-                            runner_sock.sendto(json.dumps(update_msg).encode(), SOCK_PATH)
-                            print(f"\r[RUNNER] SPEED5_THROTTLE UPDATED: {speed5_phys:.3f}", end="")
-                        except Exception as e:
-                            print(f"\n[RUNNER] Send error: {e}")
+            # 1. 키보드 입력 처리
+            key = get_key()
+            if key:
+                changed = False
+                if key == 'UP': # Up Arrow
+                    speed5_phys += 0.001
+                    changed = True
+                elif key == 'DOWN': # Down Arrow
+                    speed5_phys -= 0.001
+                    changed = True
+                
+                if changed:
+                    try:
+                        # MUX에 업데이트 메시지 전송
+                        update_msg = {
+                            "src": "runner",
+                            "event": "update_speed5",
+                            "val": speed5_phys
+                        }
+                        runner_sock.sendto(json.dumps(update_msg).encode(), SOCK_PATH)
+                        print(f"\r[RUNNER] SPEED5_THROTTLE UPDATED: {speed5_phys:.3f}", end="")
+                    except Exception as e:
+                        print(f"\n[RUNNER] Send error: {e}")
 
             # 2. 로그 큐 비우기 (최대한 빨리 처리하여 렉 유발 방지)
             while not log_queue.empty():
