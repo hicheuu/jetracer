@@ -61,7 +61,8 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     adjust_delta = kwargs.get("increment", -0.005)
     threshold_v = kwargs.get("threshold", 3.5)
     last_calib_time = 0.0
-    adjust_count = 0  # 자동 보정 횟수 카운터
+    last_diag_time = 0.0   # 자동보정 진단용 타이머 추가
+    adjust_count = 0       # 자동 보정 횟수 카운터
 
     try:
         while not stop_event.is_set():
@@ -101,20 +102,20 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                         while speed_window and now - speed_window[0][0] > window_s:
                             speed_window.popleft()
 
+                        # 1초 주기로 자동보정 상태 요약 출력 (디버깅용 - 별도 타이머 사용)
+                        if auto_calibrate and (now - last_diag_time > 1.0):
+                            avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
+                            log_queue.put({
+                                "type": "LOG", 
+                                "src": "UDP", 
+                                "msg": f"[DIAG] cmd={speed_cmd:.1f} obs={obs_speed:.1f} avg={avg_now:.2f} win={len(speed_window)} wait={now-last_calib_time:.1f}s"
+                            })
+                            last_diag_time = now
+
                         # 차량에 명령 속도가 들어오고 있을 때만 보정 로직 작동 여부 판단 (0.5 m/s 이상)
                         if speed_cmd >= 0.5:
-                            # 1초 주기로 자동보정 상태 요약 출력 (디버깅용)
-                            if now - last_log_time > 1.0:
-                                avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
-                                log_queue.put({
-                                    "type": "LOG", 
-                                    "src": "UDP", 
-                                    "msg": f"Auto-Calib Status: WindowSize={len(speed_window)}, AvgSpeed={avg_now:.2f}, Threshold={threshold_v}"
-                                })
-
-                            # 데이터가 어느 정도 쌓였고 (윈도우의 20% 이상), 
-                            # 마지막 보정으로부터 최소 윈도우 시간만큼 지났을 때 수행
-                            if (len(speed_window) > 5) and (now - speed_window[0][0] >= window_s * 0.2) and (now - last_calib_time > window_s):
+                            # 데이터가 최소 5개 이상 쌓였을 때 수행
+                            if (len(speed_window) > 5) and (now - last_calib_time > window_s):
                                 avg_speed = sum([s for t, s in speed_window]) / len(speed_window)
                                 
                                 # 평균 속도가 임계값(3.5)을 초과하면 스로틀 하향 보정 (속도 제한)
