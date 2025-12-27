@@ -108,8 +108,8 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                             if (now - speed_window[0][0] >= window_s * 0.8) and (now - last_calib_time > window_s):
                                 avg_speed = sum([s for t, s in speed_window]) / len(speed_window)
                                 
-                                # 평균 속도가 임계값(4.5) 이하라면 스로틀 상향 보정
-                                if avg_speed < threshold_v:
+                                # 평균 속도가 임계값(3.5)을 초과하면 스로틀 하향 보정 (속도 제한)
+                                if avg_speed > threshold_v:
                                     udsock.sendto(
                                         json.dumps({
                                             "src": "auto", 
@@ -121,7 +121,7 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                                     log_queue.put({
                                         "type": "LOG", 
                                         "src": "UDP", 
-                                        "msg": f"Auto-Calib: Avg({avg_speed:.2f}) < {threshold_v} -> Adjust {adjust_delta:+.3f}"
+                                        "msg": f"Auto-Calib: Avg({avg_speed:.2f}) > {threshold_v} -> Adjust {adjust_delta:+.3f}"
                                     })
                                     last_calib_time = now
                                     adjust_count += 1
