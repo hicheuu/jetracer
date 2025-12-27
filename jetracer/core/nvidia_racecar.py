@@ -40,6 +40,8 @@ class NvidiaRacecar(Racecar):
     steering_gain = traitlets.Float(default_value=-0.65)
     steering_offset = traitlets.Float(default_value=0.22)
     steering_channel = traitlets.Integer(default_value=0)
+    steering_throttle_gain_left = traitlets.Float(default_value=0.0)
+    steering_throttle_gain_right = traitlets.Float(default_value=0.0)
     
     throttle_gain = traitlets.Float(default_value=1.0)
     throttle_channel = traitlets.Integer(default_value=1)
@@ -65,6 +67,8 @@ class NvidiaRacecar(Racecar):
                 if "gain" in steering: kwargs["steering_gain"] = steering["gain"]
                 if "offset" in steering: kwargs["steering_offset"] = steering["offset"]
                 if "channel" in steering: kwargs["steering_channel"] = steering["channel"]
+                kwargs.setdefault("steering_throttle_gain_left", steering.get("throttle_gain_left", 0.0))
+                kwargs.setdefault("steering_throttle_gain_right", steering.get("throttle_gain_right", 0.0))
             
             if "throttle" in config:
                 throttle = config["throttle"]

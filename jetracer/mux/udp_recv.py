@@ -58,9 +58,10 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     # 보정 주기 및 윈도우 시간 (runner.py에서 전달받은 값 사용)
     # kwargs가 없으면 기본값 적용 (3.0s, 0.005, 4.5 m/s)
     window_s = kwargs.get("window_duration", 3.0)
-    adjust_delta = kwargs.get("increment", -0.005)
-    threshold_v = kwargs.get("threshold", 4.5)
+    adjust_delta = kwargs.get("increment", -0.003)
+    threshold_v = kwargs.get("threshold", 3.5)
     last_calib_time = 0.0
+    adjust_count = 0  # 자동 보정 횟수 카운터
 
     try:
         while not stop_event.is_set():
@@ -112,9 +113,10 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                                     log_queue.put({
                                         "type": "LOG", 
                                         "src": "UDP", 
-                                        "msg": f"Auto-Calib: Avg({avg_speed:.2f}) < {threshold_v} -> Adjust +{adjust_delta}"
+                                        "msg": f"Auto-Calib: Avg({avg_speed:.2f}) < {threshold_v} -> Adjust {adjust_delta:+.3f}"
                                     })
                                     last_calib_time = now
+                                    adjust_count += 1
 
                     # 5. MUX에 제어 메시지 송신 (obs_speed 포함)
                     udsock.sendto(
@@ -154,6 +156,7 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     except KeyboardInterrupt:
         pass
     finally:
+        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Auto-Calib 종료: 총 {adjust_count}회 보정 수행 (delta: {adjust_delta:+.3f})"})
         log_queue.put({"type": "LOG", "src": "UDP", "msg": "stopping"})
         sock.close()
         udsock.close()

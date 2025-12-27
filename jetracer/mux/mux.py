@@ -63,8 +63,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, 
-            steer_thr_gain_left=0.0, steer_thr_gain_right=0.0):
+def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
     # 기존 소켓 제거
     if os.path.exists(SOCK_PATH):
         try:
@@ -82,6 +81,10 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False,
     ESC_NEUTRAL = car._throttle_neutral
     THR_GAIN = car.throttle_gain
     
+    # 조향-스로틀 보정 게인 (설정 파일에서 로드)
+    steer_thr_gain_left = car.steering_throttle_gain_left
+    steer_thr_gain_right = car.steering_throttle_gain_right
+    
     SPEED_5_PHYS = speed5_throttle
     SPEED_1_PHYS = SPEED_5_PHYS - 0.01  
     
@@ -98,6 +101,7 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False,
         log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Calibration logging enabled: {log_path}"})
 
     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Mapped Speed Mapping: Neutral={ESC_NEUTRAL:.3f}, Gain={THR_GAIN:.2f}"})
+    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Loaded Steer Gains: L={steer_thr_gain_left:.3f}, R={steer_thr_gain_right:.3f}"})
     
     car.steering = 0.0
     car.throttle = 0.0

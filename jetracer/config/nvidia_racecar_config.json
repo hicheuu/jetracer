@@ -3,7 +3,9 @@
   "steering": {
     "gain": -0.65,
     "offset": 0.0,
-    "channel": 1
+    "channel": 1,
+    "throttle_gain_left": 0.0,
+    "throttle_gain_right": 0.0
   },
   "throttle": {
     "gain": 1.0,
