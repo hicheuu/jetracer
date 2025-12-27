@@ -22,6 +22,8 @@ STOP_BTN   = ecodes.BTN_X
 
 THR_UP_BTN   = ecodes.BTN_TR   # RB
 THR_DOWN_BTN = ecodes.BTN_TL   # LB
+STEER_GAIN_UP_BTN   = ecodes.BTN_TR2  # RT (R2)
+STEER_GAIN_DOWN_BTN = ecodes.BTN_TL2  # LT (L2)
 
 
 def clamp(x, lo=-1.0, hi=1.0):
@@ -102,6 +104,8 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
     last_stop = 0
     last_thr_up = 0
     last_thr_dn = 0
+    last_ga_up = 0
+    last_ga_dn = 0
 
     lock = threading.Lock()
     period = 1.0 / hz
@@ -185,6 +189,24 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
                                 )
                                 log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] SPEED5 -0.01"})
                             last_thr_dn = event.value
+
+                        elif event.code == STEER_GAIN_UP_BTN:
+                            if event.value == 1 and last_ga_up == 0:
+                                udsock.sendto(
+                                    json.dumps({"src": "joystick", "event": "steer_gain_up"}).encode(),
+                                    SOCK_PATH
+                                )
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] STEER GAIN UP"})
+                            last_ga_up = event.value
+
+                        elif event.code == STEER_GAIN_DOWN_BTN:
+                            if event.value == 1 and last_ga_dn == 0:
+                                udsock.sendto(
+                                    json.dumps({"src": "joystick", "event": "steer_gain_down"}).encode(),
+                                    SOCK_PATH
+                                )
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] STEER GAIN DOWN"})
+                            last_ga_dn = event.value
 
                     # ---------- 축(Analog Stick) 처리 ----------
                     elif event.type == ecodes.EV_ABS:

@@ -153,6 +153,30 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False,
                         csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-", ""])
                     continue
 
+                if msg.get("event") == "steer_gain_up":
+                    step = 0.001
+                    if car.steering < -0.1:
+                        steer_thr_gain_left += step
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [LEFT] → {steer_thr_gain_left:.3f}"})
+                    elif car.steering > 0.1:
+                        steer_thr_gain_right += step
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [RIGHT] → {steer_thr_gain_right:.3f}"})
+                    else:
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": "Steering neutral. Turn to adjust direction-specific gain."})
+                    continue
+
+                if msg.get("event") == "steer_gain_down":
+                    step = 0.001
+                    if car.steering < -0.1:
+                        steer_thr_gain_left = max(0.0, steer_thr_gain_left - step)
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [LEFT] → {steer_thr_gain_left:.3f}"})
+                    elif car.steering > 0.1:
+                        steer_thr_gain_right = max(0.0, steer_thr_gain_right - step)
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [RIGHT] → {steer_thr_gain_right:.3f}"})
+                    else:
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": "Steering neutral. Turn to adjust direction-specific gain."})
+                    continue
+
                 msg["ts"] = time.time()
                 if src == "joystick":
                     last_joy = msg
