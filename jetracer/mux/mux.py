@@ -238,7 +238,8 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False,
                             ESC_NEUTRAL,
                             THR_GAIN
                         )
-                        # 후진은 아직 단순 비례 (필요 시 수정 가능)
+                    else:
+                        # 후진은 NvidiaRacecar의 내부 공식(REVERSE_START base)을 따릅니다.
                         car.throttle = joy_throttle
                 
                 # 조향 시 감속 방지를 위한 보정 게인 적용 (좌/우 개별 적용)

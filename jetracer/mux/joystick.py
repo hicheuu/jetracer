@@ -22,8 +22,10 @@ STOP_BTN   = ecodes.BTN_X
 
 THR_UP_BTN   = ecodes.BTN_TR   # RB
 THR_DOWN_BTN = ecodes.BTN_TL   # LB
-STEER_GAIN_UP_BTN   = ecodes.BTN_TR2  # RT (R2)
-STEER_GAIN_DOWN_BTN = ecodes.BTN_TL2  # LT (L2)
+STEER_GAIN_UP_BTN   = ecodes.BTN_TR2  # RT (R2) Digital
+STEER_GAIN_DOWN_BTN = ecodes.BTN_TL2  # LT (L2) Digital
+STEER_GAIN_UP_AXIS   = ecodes.ABS_RZ   # RT (R2) Analog
+STEER_GAIN_DOWN_AXIS = ecodes.ABS_Z    # LT (L2) Analog
 
 
 def clamp(x, lo=-1.0, hi=1.0):
@@ -172,7 +174,6 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
 
                         elif event.code == THR_UP_BTN:
                             if event.value == 1 and last_thr_up == 0:
-                                # MUX에 speed5 증가 요청 전송
                                 udsock.sendto(
                                     json.dumps({"src": "joystick", "event": "speed5_up"}).encode(),
                                     SOCK_PATH
@@ -182,7 +183,6 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
 
                         elif event.code == THR_DOWN_BTN:
                             if event.value == 1 and last_thr_dn == 0:
-                                # MUX에 speed5 감소 요청 전송
                                 udsock.sendto(
                                     json.dumps({"src": "joystick", "event": "speed5_down"}).encode(),
                                     SOCK_PATH
@@ -196,7 +196,7 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
                                     json.dumps({"src": "joystick", "event": "steer_gain_up"}).encode(),
                                     SOCK_PATH
                                 )
-                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] STEER GAIN UP"})
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] STEER GAIN UP (Digital)"})
                             last_ga_up = event.value
 
                         elif event.code == STEER_GAIN_DOWN_BTN:
@@ -205,7 +205,7 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
                                     json.dumps({"src": "joystick", "event": "steer_gain_down"}).encode(),
                                     SOCK_PATH
                                 )
-                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] STEER GAIN DOWN"})
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[BTN] STEER GAIN DOWN (Digital)"})
                             last_ga_dn = event.value
 
                     # ---------- 축(Analog Stick) 처리 ----------
@@ -220,9 +220,28 @@ def run_joystick(log_queue, stop_event, device=None, deadzone=0.08, steer_scale=
                             raw_norm = norm_axis(event.value, -32768, 32767)
                             val = apply_deadzone(raw_norm, deadzone)
                             if invert_throttle: val = -val
-                            # 이제 MUX에서 물리적 타겟팅을 수행하므로, 
-                            # 조이스틱은 순수한 정규화 범위(-1.0 ~ 1.0)만 전송합니다.
                             throttle_cmd = clamp(val)
+
+                        # LT/RT 트리거를 아날로그 축으로 감지할 때 (0~255)
+                        elif event.code == STEER_GAIN_UP_AXIS:
+                            is_pressed = event.value > 128
+                            if is_pressed and last_ga_up == 0:
+                                udsock.sendto(
+                                    json.dumps({"src": "joystick", "event": "steer_gain_up"}).encode(),
+                                    SOCK_PATH
+                                )
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[AXIS] STEER GAIN UP (Analog)"})
+                            last_ga_up = 1 if is_pressed else 0
+
+                        elif event.code == STEER_GAIN_DOWN_AXIS:
+                            is_pressed = event.value > 128
+                            if is_pressed and last_ga_dn == 0:
+                                udsock.sendto(
+                                    json.dumps({"src": "joystick", "event": "steer_gain_down"}).encode(),
+                                    SOCK_PATH
+                                )
+                                log_queue.put({"type": "LOG", "src": "JOY", "msg": "[AXIS] STEER GAIN DOWN (Analog)"})
+                            last_ga_dn = 1 if is_pressed else 0
 
     except KeyboardInterrupt:
         pass
