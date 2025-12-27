@@ -71,10 +71,18 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
 
                 # ROS 송신부 포맷 대응: !fifi (16 bytes) 또는 !fffI (16 bytes)
                 if len(data) >= 16:
-                    try:
-                        raw_steer, raw_speed, obs_speed, seq = struct.unpack("!fffI", data[:16])
-                    except:
-                        raw_steer, raw_speed, obs_speed, seq = struct.unpack("!fifi", data[:16])
+                    # 1. 일단 !fffI (float speed)로 시도
+                    s1, s2, s3, s4 = struct.unpack("!fffI", data[:16])
+                    
+                    # 2. 값의 신뢰성 체크: speed_cmd(s2)가 비정상적으로 크거나 
+                    # 정수가 float으로 잘못 해석되어 아주 작은 경우(0 제외) !fifi로 전환
+                    if (abs(s2) > 100.0) or (0 < abs(s2) < 1e-10):
+                        try:
+                            s1, s2, s3, s4 = struct.unpack("!fifi", data[:16])
+                        except:
+                            pass # 실패 시 v1,v2,v3,v4 유지
+
+                    raw_steer, raw_speed, obs_speed, seq = s1, s2, s3, s4
 
                     if not math.isfinite(raw_speed):
                         continue
