@@ -142,11 +142,11 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
 
                     # 0.5초 주기로 로그 출력
                     if now - last_log_time > 0.5:
-                         log_queue.put({
-                             "type": "LOG",
-                             "src": "UDP",
-                             "msg": f"seq={seq:<5} speed={speed_cmd:.2f} steer={steer_cmd:+.3f}"
-                         })
+                          log_queue.put({
+                              "type": "LOG",
+                              "src": "UDP",
+                              "msg": f"seq={seq:<5} cmd_speed={speed_cmd:.2f} obs_speed={obs_speed:.3f} steer={steer_cmd:+.3f}"
+                          })
                          last_log_time = now
 
             except BlockingIOError:
