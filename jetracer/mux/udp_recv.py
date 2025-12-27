@@ -101,11 +101,20 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                         while speed_window and now - speed_window[0][0] > window_s:
                             speed_window.popleft()
 
-                        # 차량이 최고속도 명령 상태일 때만 보정 로직 작동 여부 판단
-                        if speed_cmd >= 4.5:
-                            # 충분한 데이터가 쌓였고(윈도우의 80% 이상), 
+                        # 차량에 명령 속도가 들어오고 있을 때만 보정 로직 작동 여부 판단 (0.5 m/s 이상)
+                        if speed_cmd >= 0.5:
+                            # 1초 주기로 자동보정 상태 요약 출력 (디버깅용)
+                            if now - last_log_time > 1.0:
+                                avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
+                                log_queue.put({
+                                    "type": "LOG", 
+                                    "src": "UDP", 
+                                    "msg": f"Auto-Calib Status: WindowSize={len(speed_window)}, AvgSpeed={avg_now:.2f}, Threshold={threshold_v}"
+                                })
+
+                            # 데이터가 어느 정도 쌓였고 (윈도우의 20% 이상), 
                             # 마지막 보정으로부터 최소 윈도우 시간만큼 지났을 때 수행
-                            if (now - speed_window[0][0] >= window_s * 0.8) and (now - last_calib_time > window_s):
+                            if (len(speed_window) > 5) and (now - speed_window[0][0] >= window_s * 0.2) and (now - last_calib_time > window_s):
                                 avg_speed = sum([s for t, s in speed_window]) / len(speed_window)
                                 
                                 # 평균 속도가 임계값(3.5)을 초과하면 스로틀 하향 보정 (속도 제한)
