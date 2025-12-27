@@ -47,8 +47,9 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     sock.setblocking(False)
 
     log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Listening on {UDP_IP}:{UDP_PORT}"})
+    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"DEBUG: auto_calibrate={auto_calibrate}, target={target_velocity}, threshold={kwargs.get('threshold')}"})
     if auto_calibrate:
-        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Auto-calibration ENABLED (Target: {target_velocity} m/s)"})
+        log_queue.put({"type": "LOG", "src": "UDP", "msg": "Auto-calibration ENABLED"})
 
     last_rx_time = time.time()
     last_log_time = 0.0
@@ -66,6 +67,18 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
 
     try:
         while not stop_event.is_set():
+            now = time.time()
+            
+            # 1초 주기 하트비트 진단 로그 (데이터 수신 여부와 상관없이 출력)
+            if now - last_diag_time > 1.0:
+                avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
+                log_queue.put({
+                    "type": "LOG", 
+                    "src": "UDP", 
+                    "msg": f"[DIAG] Alive. Calib={auto_calibrate} Win={len(speed_window)} Avg={avg_now:.2f} last_rx={now-last_rx_time:.1f}s"
+                })
+                last_diag_time = now
+
             try:
                 # 비블로킹 방식으로 UDP 패킷 수신
                 data, _ = sock.recvfrom(64)
@@ -153,27 +166,19 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                 pass
             except struct.error as e:
                  log_queue.put({"type": "LOG", "src": "UDP", "msg": f"struct error: {e}"})
+            except Exception as e:
+                log_queue.put({"type": "LOG", "src": "UDP", "msg": f"CRITICAL LOOP ERROR: {e}"})
+                time.sleep(0.1)
 
             # Watchdog: 일정 시간 동안 수신이 없으면 경고
             if time.time() - last_rx_time > WATCHDOG_TIMEOUT:
                 last_rx_time = time.time()
                 log_queue.put({"type": "LOG", "src": "UDP", "msg": "watchdog timer triggered"})
 
-            # 1초 주기로 자동보정 상태 요약 출력 (루프 최하단으로 이동하여 항상 출력 보장)
-            now = time.time()
-            if auto_calibrate and (now - last_diag_time > 1.0):
-                avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
-                log_queue.put({
-                    "type": "LOG", 
-                    "src": "UDP", 
-                    "msg": f"[DIAG] Calib={auto_calibrate} cmd={speed_cmd:.1f} avg={avg_now:.2f} win={len(speed_window)} last_rx={now-last_rx_time:.1f}s"
-                })
-                last_diag_time = now
-
             time.sleep(0.005)
 
-    except KeyboardInterrupt:
-        pass
+    except Exception as e:
+        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"UDP PROCESS CRASHED: {e}"})
     finally:
         log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Auto-Calib 종료: 총 {adjust_count}회 보정 수행 (delta: {adjust_delta:+.3f})"})
         log_queue.put({"type": "LOG", "src": "UDP", "msg": "stopping"})

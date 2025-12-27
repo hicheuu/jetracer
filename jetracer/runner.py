@@ -91,8 +91,13 @@ def runner(args):
                     break
             
             # 메인 프로세스 생존 확인
-            if not p_mux.is_alive():
-                print("\n[RUNNER] MUX 프로세스가 예기치 않게 종료되었습니다.")
+            for name, p in [("MUX", p_mux), ("JOY", p_joy), ("UDP", p_udp)]:
+                if not p.is_alive():
+                    print(f"\n[RUNNER] {name} 프로세스가 예기치 않게 종료되었습니다.")
+                    stop_event.set()
+                    break
+            
+            if stop_event.is_set():
                 break
                 
             time.sleep(0.01) # CPU 점유율 조절
