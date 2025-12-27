@@ -141,7 +141,7 @@ class NvidiaRacecar(Racecar):
         
         # 캘리브레이션용 로그 출력
         rounded_phys = round(final_throttle, 3)
-        if rounded_phys != self._last_printed_throttle:
+        if self.verbose and rounded_phys != self._last_printed_throttle:
             print(f"[motor] target={input_val:+.3f} | physical_esc={final_throttle:.3f}")
             self._last_printed_throttle = rounded_phys
             

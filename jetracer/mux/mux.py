@@ -63,7 +63,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
+def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbose_motor=False):
     # 기존 소켓 제거
     if os.path.exists(SOCK_PATH):
         try:
@@ -75,7 +75,7 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
     sock.bind(SOCK_PATH)
     sock.setblocking(False)
 
-    car = NvidiaRacecar()
+    car = NvidiaRacecar(verbose=verbose_motor)
     
     # 하드웨어 파라미터 추출
     ESC_NEUTRAL = car._throttle_neutral
@@ -283,6 +283,10 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
     except KeyboardInterrupt:
         pass
     finally:
+        log_queue.put({"type": "LOG", "src": "MUX", "msg": "--- 최종 가동 요약 ---"})
+        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"최종 SPEED_5_PHYS: {SPEED_5_PHYS:.4f}"})
+        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"최종 Steer Gain (L/R): {steer_thr_gain_left:.3f} / {steer_thr_gain_right:.3f}"})
+        log_queue.put({"type": "LOG", "src": "MUX", "msg": "----------------------"})
         car.steering = 0.0
         car.throttle = 0.0
         sock.close()

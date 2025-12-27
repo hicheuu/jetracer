@@ -63,7 +63,8 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     threshold_v = kwargs.get("threshold", 3.5)
     last_calib_time = 0.0
     last_diag_time = 0.0   # 자동보정 진단용 타이머 추가
-    adjust_count = 0       # 자동 보정 횟수 카운터
+    inc_count = 0          # 증가(정지 복구) 횟수
+    dec_count = 0          # 감소(과속 방지) 횟수
 
     try:
         while not stop_event.is_set():
@@ -129,11 +130,13 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                                 if avg_speed > threshold_v:
                                     final_delta = adjust_delta # -0.001
                                     adjust_msg = f"Speed Limit: Avg1s({avg_speed:.2f}) > {threshold_v}"
+                                    dec_count += 1
                                 
-                                # 2. 저속/정지 보정 (명령은 5.0인데 실제 1초 평균이 0.5 이하일 때 가속)
+                                # 2. 저속/정지 보정 (명령은 5.0인데 실제 1초 평균이 0.5 이하일 때 0.002 가속)
                                 elif speed_cmd >= 4.5 and avg_speed <= 0.5:
-                                    final_delta = 0.001
+                                    final_delta = 0.002
                                     adjust_msg = f"Stall Recovery: Avg1s({avg_speed:.2f}) <= 0.5"
+                                    inc_count += 1
 
                                 if final_delta != 0.0:
                                     udsock.sendto(
@@ -150,7 +153,6 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                                         "msg": f"Auto-Calib: {adjust_msg} -> Adjust {final_delta:+.3f}"
                                     })
                                     last_calib_time = now
-                                    adjust_count += 1
 
                     # 5. MUX에 제어 메시지 송신 (obs_speed 포함)
                     udsock.sendto(
@@ -193,7 +195,8 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     except Exception as e:
         log_queue.put({"type": "LOG", "src": "UDP", "msg": f"UDP PROCESS CRASHED: {e}"})
     finally:
-        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Auto-Calib 종료: 총 {adjust_count}회 보정 수행 (delta: {adjust_delta:+.3f})"})
+        total = inc_count + dec_count
+        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Auto-Calib 종료: 총 {total}회 보정 (증가: {inc_count}회, 감소: {dec_count}회)"})
         log_queue.put({"type": "LOG", "src": "UDP", "msg": "stopping"})
         sock.close()
         udsock.close()

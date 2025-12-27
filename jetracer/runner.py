@@ -20,7 +20,8 @@ def runner(args):
     # 1. MUX 프로세스 (중심 제어 루프)
     p_mux = multiprocessing.Process(
         target=run_mux, 
-        args=(log_queue, stop_event, args.speed5_throttle, args.log_calibration)
+        args=(log_queue, stop_event, args.speed5_throttle, args.log_calibration),
+        kwargs={"verbose_motor": args.log_motor}
     )
     p_mux.start()
 
@@ -143,6 +144,7 @@ if __name__ == "__main__":
     parser.add_argument("--auto-calibrate-increment", type=float, default=-0.001, help="자동 보정 시 한 번에 조절할 스로틀 양")
     parser.add_argument("--auto-calibrate-threshold", type=float, default=3.5, help="자동 보정이 트리거되는 평균 속도 임계값 (m/s)")
     parser.add_argument("--quiet-udp", action="store_true", help="UDP 모드 루틴 로그 숨기기 (에러/자동보정 요약은 표시)")
+    parser.add_argument("--log-motor", action="store_true", help="모터 물리 신호 로그([motor]) 활성화")
     
     args = parser.parse_args()
     
