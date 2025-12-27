@@ -71,11 +71,11 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
             
             # 1초 주기 하트비트 진단 로그 (데이터 수신 여부와 상관없이 출력)
             if now - last_diag_time > 1.0:
-                avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
+                avg_1s = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0.0
                 log_queue.put({
                     "type": "LOG", 
                     "src": "UDP", 
-                    "msg": f"[DIAG] Alive. Calib={auto_calibrate} Win={len(speed_window)} Avg={avg_now:.2f} last_rx={now-last_rx_time:.1f}s"
+                    "msg": f"[DIAG] Alive. Calib={auto_calibrate} Win={len(speed_window)} Avg1s={avg_1s:.2f} last_rx={now-last_rx_time:.1f}s"
                 })
                 last_diag_time = now
 
@@ -117,24 +117,37 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
 
                         # 차량에 명령 속도가 들어오고 있을 때만 보정 로직 작동 여부 판단 (0.5 m/s 이상)
                         if speed_cmd >= 0.5:
-                            # 데이터가 최소 5개 이상 쌓였을 때 수행
+                            # 데이터가 쌓였고, 마지막 보정으로부터 최소 윈도우 시간만큼 지났을 때 수행
                             if (len(speed_window) > 5) and (now - last_calib_time > window_s):
+                                # 윈도우 전체(1초) 평균
                                 avg_speed = sum([s for t, s in speed_window]) / len(speed_window)
                                 
-                                # 평균 속도가 임계값(3.5)을 초과하면 스로틀 하향 보정 (속도 제한)
+                                adjust_msg = ""
+                                final_delta = 0.0
+
+                                # 1. 과속 보정 (임계값 3.5 초과 시 감속)
                                 if avg_speed > threshold_v:
+                                    final_delta = adjust_delta # -0.001
+                                    adjust_msg = f"Speed Limit: Avg1s({avg_speed:.2f}) > {threshold_v}"
+                                
+                                # 2. 저속/정지 보정 (명령은 5.0인데 실제 1초 평균이 0.5 이하일 때 가속)
+                                elif speed_cmd >= 4.5 and avg_speed <= 0.5:
+                                    final_delta = 0.001
+                                    adjust_msg = f"Stall Recovery: Avg1s({avg_speed:.2f}) <= 0.5"
+
+                                if final_delta != 0.0:
                                     udsock.sendto(
                                         json.dumps({
                                             "src": "auto", 
                                             "event": "speed5_adjust", 
-                                            "delta": adjust_delta
+                                            "delta": final_delta
                                         }).encode(),
                                         SOCK_PATH
                                     )
                                     log_queue.put({
                                         "type": "LOG", 
                                         "src": "UDP", 
-                                        "msg": f"Auto-Calib: Avg({avg_speed:.2f}) > {threshold_v} -> Adjust {adjust_delta:+.3f}"
+                                        "msg": f"Auto-Calib: {adjust_msg} -> Adjust {final_delta:+.3f}"
                                     })
                                     last_calib_time = now
                                     adjust_count += 1

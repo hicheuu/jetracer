@@ -139,8 +139,8 @@ if __name__ == "__main__":
     parser.add_argument("--log-calibration", action="store_true", help="속도 캘리브레이션용 데이터 로깅 활성화")
     parser.add_argument("--auto-calibrate", action="store_true", help="실시간 실제 속도 기반 스로틀 자동 보정 활성화")
     parser.add_argument("--target-velocity", type=float, default=5.0, help="자동 보정 시 목표로 하는 실제 차량 속도 (m/s)")
-    parser.add_argument("--auto-calibrate-window", type=float, default=3.0, help="자동 보정 시 평균 속도를 계산할 윈도우 시간 (초)")
-    parser.add_argument("--auto-calibrate-increment", type=float, default=-0.005, help="자동 보정 시 한 번에 조절할 스로틀 양")
+    parser.add_argument("--auto-calibrate-window", type=float, default=1.0, help="자동 보정 시 평균 속도를 계산할 윈도우 시간 (초)")
+    parser.add_argument("--auto-calibrate-increment", type=float, default=-0.001, help="자동 보정 시 한 번에 조절할 스로틀 양")
     parser.add_argument("--auto-calibrate-threshold", type=float, default=3.5, help="자동 보정이 트리거되는 평균 속도 임계값 (m/s)")
     parser.add_argument("--quiet-udp", action="store_true", help="UDP 모드 루틴 로그 숨기기 (에러/자동보정 요약은 표시)")
     
