@@ -102,6 +102,19 @@ def runner(args):
     finally:
         # 모든 프로세스 종료 요청
         stop_event.set()
+        
+        # 프로세스들이 종료 로그를 보낼 시간을 주고 큐 비우기
+        time.sleep(0.3)
+        while not log_queue.empty():
+            try:
+                record = log_queue.get_nowait()
+                if record.get("type") == "LOG":
+                    src = record["src"]
+                    msg = record["msg"]
+                    print(f"[{src}] {msg}")
+            except:
+                break
+        
         p_mux.join(timeout=1)
         p_joy.join(timeout=1)
         p_udp.join(timeout=1)
