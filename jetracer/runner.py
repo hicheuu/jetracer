@@ -77,9 +77,10 @@ def runner(args):
                             elif any(k in msg for k in ["Error", "Device", "stopping"]):
                                 should_print = True
                         elif src == "UDP":
-                            if current_mode == "udp":
+                            # UDP 로그: 자동보정 요약, 에러, 종료 메시지는 항상 출력
+                            if any(k in msg for k in ["Auto-Calib", "Error", "stopping", "종료"]):
                                 should_print = True
-                            elif "Error" in msg or "stopping" in msg:
+                            elif current_mode == "udp" and not args.quiet_udp:
                                 should_print = True
 
                         if should_print:
@@ -123,6 +124,7 @@ if __name__ == "__main__":
     parser.add_argument("--auto-calibrate-window", type=float, default=3.0, help="자동 보정 시 평균 속도를 계산할 윈도우 시간 (초)")
     parser.add_argument("--auto-calibrate-increment", type=float, default=0.005, help="자동 보정 시 한 번에 조절할 스로틀 양")
     parser.add_argument("--auto-calibrate-threshold", type=float, default=4.5, help="자동 보정이 트리거되는 평균 속도 임계값 (m/s)")
+    parser.add_argument("--quiet-udp", action="store_true", help="UDP 모드 루틴 로그 숨기기 (에러/자동보정 요약은 표시)")
     
     args = parser.parse_args()
     
