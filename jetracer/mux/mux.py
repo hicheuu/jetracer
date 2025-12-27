@@ -63,7 +63,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
+def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, 
+            steer_thr_gain_left=0.0, steer_thr_gain_right=0.0):
     # 기존 소켓 제거
     if os.path.exists(SOCK_PATH):
         try:
@@ -213,9 +214,19 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
                             ESC_NEUTRAL,
                             THR_GAIN
                         )
-                    else:
                         # 후진은 아직 단순 비례 (필요 시 수정 가능)
                         car.throttle = joy_throttle
+                
+                # 조향 시 감속 방지를 위한 보정 게인 적용 (좌/우 개별 적용)
+                if abs(car.steering) > 0.1 and abs(car.throttle) > 0.01:
+                    # 좌조향(steering < 0), 우조향(steering > 0)에 맞춰 게인 선택
+                    gain = steer_thr_gain_left if car.steering < 0 else steer_thr_gain_right
+                    compensation = abs(car.steering) * gain
+                    
+                    if car.throttle > 0:
+                        car.throttle = min(1.0, car.throttle + compensation)
+                    else:
+                        car.throttle = max(-1.0, car.throttle - compensation)
                 
                 if now - last_log_time > 0.5:
                     log_queue.put({

@@ -20,7 +20,11 @@ def runner(args):
     # 1. MUX 프로세스 (중심 제어 루프)
     p_mux = multiprocessing.Process(
         target=run_mux, 
-        args=(log_queue, stop_event, args.speed5_throttle, args.log_calibration)
+        args=(log_queue, stop_event, args.speed5_throttle, args.log_calibration),
+        kwargs={
+            "steer_thr_gain_left": args.steering_throttle_gain_left,
+            "steer_thr_gain_right": args.steering_throttle_gain_right
+        }
     )
     p_mux.start()
 
@@ -112,6 +116,8 @@ if __name__ == "__main__":
     parser.add_argument("--speed5-throttle", type=float, default=0.20, help="초기 물리적 스로틀 목표값 (조이스틱 RB/LB로 0.001 단위 조절 가능)")
     parser.add_argument("--device", default=None, help="조이스틱 장치 경로 (예: /dev/input/event2)")
     parser.add_argument("--steer-scale", type=float, default=1.0, help="조이스틱 조향 배율")
+    parser.add_argument("--steering-throttle-gain-left", type=float, default=0.0, help="좌조향 시 추가 스로틀 보정 게인")
+    parser.add_argument("--steering-throttle-gain-right", type=float, default=0.0, help="우조향 시 추가 스로틀 보정 게인")
     parser.add_argument("--log-calibration", action="store_true", help="속도 캘리브레이션용 데이터 로깅 활성화")
     parser.add_argument("--auto-calibrate", action="store_true", help="실시간 실제 속도 기반 스로틀 자동 보정 활성화")
     parser.add_argument("--target-velocity", type=float, default=5.0, help="자동 보정 시 목표로 하는 실제 차량 속도 (m/s)")

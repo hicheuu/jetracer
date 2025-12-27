@@ -16,6 +16,8 @@ python3 -m jetracer.runner --speed5-throttle 0.20
 
 ### 주요 실행 인자 (Arguments)
 - `--speed5-throttle`: 최고 목표 물리 출력값 (0.0~1.0)
+- `--steering-throttle-gain-left`: 좌조향 시 추가 스로틀 보정 게인
+- `--steering-throttle-gain-right`: 우조향 시 추가 스로틀 보정 게인
 - `--log-calibration`: 캘리브레이션용 데이터 로깅 활성화
 - `--auto-calibrate`: 실시간 실제 속도 기반 스로틀 자동 보정 활성화
 - `--target-velocity`: 자동 보정 시 목표 속도 (m/s)
