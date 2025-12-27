@@ -77,8 +77,8 @@ def runner(args):
                             elif any(k in msg for k in ["Error", "Device", "stopping"]):
                                 should_print = True
                         elif src == "UDP":
-                            # UDP 로그: 자동보정 요약, 에러, 종료 메시지는 항상 출력
-                            if any(k in msg for k in ["Auto-Calib", "Error", "stopping", "종료"]):
+                            # UDP 로그: 자동보정 요약, 진단, 에러, 종료 메시지는 항상 출력
+                            if any(k in msg for k in ["Auto-Calib", "[DIAG]", "Error", "stopping", "종료"]):
                                 should_print = True
                             elif current_mode == "udp" and not args.quiet_udp:
                                 should_print = True

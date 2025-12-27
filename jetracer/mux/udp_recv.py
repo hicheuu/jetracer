@@ -102,16 +102,6 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                         while speed_window and now - speed_window[0][0] > window_s:
                             speed_window.popleft()
 
-                        # 1초 주기로 자동보정 상태 요약 출력 (디버깅용 - 별도 타이머 사용)
-                        if auto_calibrate and (now - last_diag_time > 1.0):
-                            avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
-                            log_queue.put({
-                                "type": "LOG", 
-                                "src": "UDP", 
-                                "msg": f"[DIAG] cmd={speed_cmd:.1f} obs={obs_speed:.1f} avg={avg_now:.2f} win={len(speed_window)} wait={now-last_calib_time:.1f}s"
-                            })
-                            last_diag_time = now
-
                         # 차량에 명령 속도가 들어오고 있을 때만 보정 로직 작동 여부 판단 (0.5 m/s 이상)
                         if speed_cmd >= 0.5:
                             # 데이터가 최소 5개 이상 쌓였을 때 수행
@@ -168,6 +158,17 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
             if time.time() - last_rx_time > WATCHDOG_TIMEOUT:
                 last_rx_time = time.time()
                 log_queue.put({"type": "LOG", "src": "UDP", "msg": "watchdog timer triggered"})
+
+            # 1초 주기로 자동보정 상태 요약 출력 (루프 최하단으로 이동하여 항상 출력 보장)
+            now = time.time()
+            if auto_calibrate and (now - last_diag_time > 1.0):
+                avg_now = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0
+                log_queue.put({
+                    "type": "LOG", 
+                    "src": "UDP", 
+                    "msg": f"[DIAG] Calib={auto_calibrate} cmd={speed_cmd:.1f} avg={avg_now:.2f} win={len(speed_window)} last_rx={now-last_rx_time:.1f}s"
+                })
+                last_diag_time = now
 
             time.sleep(0.005)
 
