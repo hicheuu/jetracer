@@ -34,7 +34,7 @@ def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
-def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0):
+def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **kwargs):
     """
     UDP 패킷을 수신하여 추상화된 제어 명령(스티어링, 속도)으로 변환 후 MUX로 전달합니다.
     """
@@ -52,8 +52,15 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0):
 
     last_rx_time = time.time()
     last_log_time = 0.0
+    # 자동 보정용 윈도우 데이터 저장 (collections.deque 활용)
+    from collections import deque
+    speed_window = deque()
+    # 보정 주기 및 윈도우 시간 (runner.py에서 전달받은 값 사용)
+    # kwargs가 없으면 기본값 적용 (3.0s, 0.005, 4.5 m/s)
+    window_s = kwargs.get("window_duration", 3.0)
+    adjust_delta = kwargs.get("increment", 0.005)
+    threshold_v = kwargs.get("threshold", 4.5)
     last_calib_time = 0.0
-    DEADZONE = 0.05 # m/s
 
     try:
         while not stop_event.is_set():
@@ -74,21 +81,40 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0):
                     steer_cmd = clamp(raw_steer * STEER_GAIN, -1.0, 1.0)
                     speed_cmd = float(raw_speed)
 
-                    # 4. 실시간 자동 보정 수행
-                    # - 자동 보정이 켜져 있고
-                    # - 차량 명령 속도가 5.0 근처(최고속도)이며
-                    # - 실제 속도 데이터가 유효할 때 작동
                     now = time.time()
-                    if auto_calibrate and speed_cmd >= 4.5 and obs_speed > 0:
-                        if now - last_calib_time > 0.5: # 0.5초마다 보정 판단
-                            error = target_velocity - obs_speed
-                            if abs(error) > DEADZONE:
-                                event = "speed5_up" if error > 0 else "speed5_down"
-                                udsock.sendto(
-                                    json.dumps({"src": "auto", "event": event}).encode(),
-                                    SOCK_PATH
-                                )
-                                last_calib_time = now
+
+                    # 4. 실시간 자동 보정 수행 (윈도우 방식)
+                    if auto_calibrate and obs_speed > 0:
+                        # 윈도우에 현재 데이터 추가
+                        speed_window.append((now, obs_speed))
+                        
+                        # 윈도우 범위를 벗어난 오래된 데이터 제거
+                        while speed_window and now - speed_window[0][0] > window_s:
+                            speed_window.popleft()
+
+                        # 차량이 최고속도 명령 상태일 때만 보정 로직 작동 여부 판단
+                        if speed_cmd >= 4.5:
+                            # 충분한 데이터가 쌓였고(윈도우의 80% 이상), 
+                            # 마지막 보정으로부터 최소 윈도우 시간만큼 지났을 때 수행
+                            if (now - speed_window[0][0] >= window_s * 0.8) and (now - last_calib_time > window_s):
+                                avg_speed = sum([s for t, s in speed_window]) / len(speed_window)
+                                
+                                # 평균 속도가 임계값(4.5) 이하라면 스로틀 상향 보정
+                                if avg_speed < threshold_v:
+                                    udsock.sendto(
+                                        json.dumps({
+                                            "src": "auto", 
+                                            "event": "speed5_adjust", 
+                                            "delta": adjust_delta
+                                        }).encode(),
+                                        SOCK_PATH
+                                    )
+                                    log_queue.put({
+                                        "type": "LOG", 
+                                        "src": "UDP", 
+                                        "msg": f"Auto-Calib: Avg({avg_speed:.2f}) < {threshold_v} -> Adjust +{adjust_delta}"
+                                    })
+                                    last_calib_time = now
 
                     # 5. MUX에 제어 메시지 송신 (obs_speed 포함)
                     udsock.sendto(

@@ -135,6 +135,16 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False,
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Remote update: SPEED_5_PHYS → {SPEED_5_PHYS:.3f}"})
                     continue
 
+                if msg.get("event") == "speed5_adjust":
+                    delta = msg.get("delta", 0.0)
+                    SPEED_5_PHYS += delta
+                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS (Auto) → {SPEED_5_PHYS:.3f} ({delta:+.3f})"})
+                    if csv_writer:
+                        cv_dir = "+" if delta > 0 else "-"
+                        csv_writer.writerow([time.time(), "auto_adjust", SPEED_5_PHYS, cv_dir, ""])
+                    continue
+
                 if msg.get("event") == "speed5_up":
                     step = 0.01 if mode == "joystick" else 0.001
                     SPEED_5_PHYS += step
