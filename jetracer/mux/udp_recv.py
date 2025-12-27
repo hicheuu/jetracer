@@ -58,7 +58,7 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     # 보정 주기 및 윈도우 시간 (runner.py에서 전달받은 값 사용)
     # kwargs가 없으면 기본값 적용 (3.0s, 0.005, 4.5 m/s)
     window_s = kwargs.get("window_duration", 3.0)
-    adjust_delta = kwargs.get("increment", -0.003)
+    adjust_delta = kwargs.get("increment", -0.005)
     threshold_v = kwargs.get("threshold", 3.5)
     last_calib_time = 0.0
     adjust_count = 0  # 자동 보정 횟수 카운터
