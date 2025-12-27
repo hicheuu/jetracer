@@ -37,22 +37,26 @@ def plot_latest_calibration():
     # 4. 그래프 그리기
     plt.figure(figsize=(12, 6))
     
-    # 속도 선 그래프 (인지에서 들어오는 정보)
+    # 속도 선 그래프
     if not speed_data.empty:
-        plt.plot(speed_data['relative_time'], speed_data['value'], label='Perception Speed (m/s)', color='gray', alpha=0.5, linestyle='--')
-        plt.scatter(speed_data['relative_time'], speed_data['value'], color='black', s=1, alpha=0.3)
+        # 조이스틱으로 맞춘 물리적 스로틀 타겟 (Reference)
+        # 스로틀 값(0.1~0.2)과 속도값(m/s)의 단위가 다르므로, 보조 축을 쓰거나 범례로만 표시
+        # 여기서는 단순히 '기준선'으로서의 의미를 위해 스로틀 값을 같이 그림
+        plt.plot(speed_data['relative_time'], speed_data['value'], label='Physical Throttle Target', color='orange', alpha=0.6, linestyle='-')
+        
+        # 인지된 실제 속도 (Observed) - 이게 메인 (Y축: m/s)
+        plt.plot(speed_data['relative_time'], speed_data['obs_value'], label='BEV Observed Speed (m/s)', color='green', linewidth=2)
 
-    # 증가(UP) 이벤트 표시 - 빨간색
+    # 증가(UP) 이벤트 표시 - 빨간색 (실제 속도 위에 표시)
     if not adjust_up.empty:
-        # 이벤트 시점의 속도를 찾기 위해 병합(merge)이나 가장 가까운 값 찾기 대신 
-        # y축 위치를 시각적으로 구분하기 위해 별도 표시하거나 속도 데이터와 오버레이
-        # 여기서는 편의상 속도 그래프 위에 찍기 위해 속도 데이터와 시간 축을 맞춤
-        plt.scatter(adjust_up['relative_time'], [max(speed_data['value']) * 1.05 if not speed_data.empty else 1.0] * len(adjust_up), 
+        y_pos = max(speed_data['obs_value']) * 1.1 if not speed_data.empty else 1.0
+        plt.scatter(adjust_up['relative_time'], [y_pos] * len(adjust_up), 
                     color='red', label='Throttle UP (RB)', marker='^', s=100)
 
-    # 감소(DOWN) 이벤트 표시 - 파란색
+    # 감소(DOWN) 이벤트 표시 - 파란색 (실제 속도 근처에 표시)
     if not adjust_down.empty:
-        plt.scatter(adjust_down['relative_time'], [max(speed_data['value']) * 0.95 if not speed_data.empty else 0.5] * len(adjust_down), 
+        y_pos = max(speed_data['obs_value']) * 0.9 if not speed_data.empty else 0.5
+        plt.scatter(adjust_down['relative_time'], [y_pos] * len(adjust_down), 
                     color='blue', label='Throttle DOWN (LB)', marker='v', s=100)
 
     plt.title(f"Speed Calibration Trace: {os.path.basename(latest_file)}")

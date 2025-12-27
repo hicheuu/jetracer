@@ -38,7 +38,7 @@ def runner(args):
     # 3. UDP 수신 프로세스
     p_udp = multiprocessing.Process(
         target=run_udp,
-        args=(log_queue, stop_event)
+        args=(log_queue, stop_event, args.auto_calibrate, args.target_velocity)
     )
     p_udp.start()
 
@@ -113,6 +113,8 @@ if __name__ == "__main__":
     parser.add_argument("--device", default=None, help="조이스틱 장치 경로 (예: /dev/input/event2)")
     parser.add_argument("--steer-scale", type=float, default=1.0, help="조이스틱 조향 배율")
     parser.add_argument("--log-calibration", action="store_true", help="속도 캘리브레이션용 데이터 로깅 활성화")
+    parser.add_argument("--auto-calibrate", action="store_true", help="실시간 실제 속도 기반 스로틀 자동 보정 활성화")
+    parser.add_argument("--target-velocity", type=float, default=5.0, help="자동 보정 시 목표로 하는 실제 차량 속도 (m/s)")
     
     args = parser.parse_args()
     

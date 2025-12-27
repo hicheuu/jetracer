@@ -34,12 +34,9 @@ def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
-def run_udp(log_queue, stop_event):
+def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0):
     """
     UDP 패킷을 수신하여 추상화된 제어 명령(스티어링, 속도)으로 변환 후 MUX로 전달합니다.
-    
-    수신 데이터 형식: !ffI (float steer, float speed, uint sequence)
-    MUX UDS 메시지 형식: {"src": "udp", "steer": float, "speed": float}
     """
     # 전송용 UDS 소켓 생성
     udsock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -50,10 +47,13 @@ def run_udp(log_queue, stop_event):
     sock.setblocking(False)
 
     log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Listening on {UDP_IP}:{UDP_PORT}"})
-    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"format=!ffI | speed range=[{SPEED_MIN}, {SPEED_MAX}]"})
+    if auto_calibrate:
+        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Auto-calibration ENABLED (Target: {target_velocity} m/s)"})
 
     last_rx_time = time.time()
     last_log_time = 0.0
+    last_calib_time = 0.0
+    DEADZONE = 0.05 # m/s
 
     try:
         while not stop_event.is_set():
@@ -61,31 +61,42 @@ def run_udp(log_queue, stop_event):
                 # 비블로킹 방식으로 UDP 패킷 수신
                 data, _ = sock.recvfrom(64)
 
-                if len(data) >= 12:
-                    raw_steer, raw_speed, seq = struct.unpack("!ffI", data[:12])
+                # ROS 송신부 포맷 대응: !fifi (16 bytes) 또는 !fffI (16 bytes)
+                if len(data) >= 16:
+                    try:
+                        raw_steer, raw_speed, obs_speed, seq = struct.unpack("!fffI", data[:16])
+                    except:
+                        raw_steer, raw_speed, obs_speed, seq = struct.unpack("!fifi", data[:16])
 
-                    # 1. 속도 유효성 검사 (NaN/Inf 및 범위 확인)
                     if not math.isfinite(raw_speed):
-                        log_queue.put({"type": "LOG", "src": "UDP", "msg": "invalid speed (nan/inf), drop"})
                         continue
 
-                    if raw_speed < SPEED_MIN or raw_speed > SPEED_MAX:
-                        log_queue.put({"type": "LOG", "src": "UDP", "msg": f"invalid speed={raw_speed:.3f}, drop"})
-                        continue
+                    steer_cmd = clamp(raw_steer * STEER_GAIN, -1.0, 1.0)
+                    speed_cmd = float(raw_speed)
 
-                    # 2. 스티어링 게인 적용 및 클리핑
-                    steer_val = raw_steer * STEER_GAIN
-                    steer_cmd = clamp(steer_val, -1.0, 1.0)
+                    # 4. 실시간 자동 보정 수행
+                    # - 자동 보정이 켜져 있고
+                    # - 차량 명령 속도가 5.0 근처(최고속도)이며
+                    # - 실제 속도 데이터가 유효할 때 작동
+                    now = time.time()
+                    if auto_calibrate and speed_cmd >= 4.5 and obs_speed > 0:
+                        if now - last_calib_time > 0.5: # 0.5초마다 보정 판단
+                            error = target_velocity - obs_speed
+                            if abs(error) > DEADZONE:
+                                event = "speed5_up" if error > 0 else "speed5_down"
+                                udsock.sendto(
+                                    json.dumps({"src": "auto", "event": event}).encode(),
+                                    SOCK_PATH
+                                )
+                                last_calib_time = now
 
-                    # 3. 속도 값 그대로 전달 (MUX에서 물리적 매핑 수행)
-                    speed_cmd = raw_speed
-
-                    # 4. MUX에 제어 메시지 송신
+                    # 5. MUX에 제어 메시지 송신 (obs_speed 포함)
                     udsock.sendto(
                         json.dumps({
                             "src": "udp",
                             "steer": steer_cmd,
-                            "speed": speed_cmd
+                            "speed": speed_cmd,
+                            "obs_speed": obs_speed
                         }).encode(),
                         SOCK_PATH
                     )

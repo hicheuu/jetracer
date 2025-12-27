@@ -93,7 +93,7 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
         log_path = f"logs/calibration_{timestamp}.csv"
         csv_file = open(log_path, 'w', newline='')
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(["timestamp", "type", "value", "direction"]) # 헤더
+        csv_writer.writerow(["timestamp", "type", "value", "direction", "obs_value"]) # 헤더
         log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Calibration logging enabled: {log_path}"})
 
     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Mapped Speed Mapping: Neutral={ESC_NEUTRAL:.3f}, Gain={THR_GAIN:.2f}"})
@@ -140,7 +140,7 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
                     SPEED_1_PHYS = SPEED_5_PHYS - 0.01
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (+{step})"})
                     if csv_writer:
-                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "+"])
+                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "+", ""])
                     continue
 
                 if msg.get("event") == "speed5_down":
@@ -149,7 +149,7 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
                     SPEED_1_PHYS = SPEED_5_PHYS - 0.01
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (-{step})"})
                     if csv_writer:
-                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-"])
+                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-", ""])
                     continue
 
                 msg["ts"] = time.time()
@@ -158,7 +158,9 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False):
                 elif src == "udp":
                     last_udp = msg
                     if csv_writer and "speed" in msg:
-                        csv_writer.writerow([time.time(), "speed", msg["speed"], ""])
+                        obs_sp = msg.get("obs_speed", 0.0)
+                        # value 컬럼에 cmd["speed"] 대신 현재 조이스틱 기준인 SPEED_5_PHYS를 기록
+                        csv_writer.writerow([time.time(), "speed", SPEED_5_PHYS, "", obs_sp])
 
             except BlockingIOError:
                 pass
