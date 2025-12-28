@@ -10,7 +10,10 @@
   "throttle": {
     "gain": 1.0,
     "channel": 0,
-    "neutral": 0.21
+    "neutral": 0.21,
+    "speed5_throttle": 0.35,
+    "reverse_start": -0.1,
+    "reverse_gain": 0.7
   },
   "input_to_ms": 2.0
 }

@@ -134,11 +134,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Jetracer Unified Runner (Normalized Control)")
     
     # 공통 제어 인자
-    parser.add_argument("--speed5-throttle", type=float, default=0.20, help="초기 물리적 스로틀 목표값 (조이스틱 RB/LB로 0.001 단위 조절 가능)")
+    parser.add_argument("--speed5-throttle", type=float, default=None, help="속도 5.0일 때의 물리적 스로틀 목표값 (None인 경우 config 파일에서 로드)")
     parser.add_argument("--device", default=None, help="조이스틱 장치 경로 (예: /dev/input/event2)")
     parser.add_argument("--steer-scale", type=float, default=1.0, help="조이스틱 조향 배율")
     parser.add_argument("--log-calibration", action="store_true", help="속도 캘리브레이션용 데이터 로깅 활성화")
-    parser.add_argument("--auto-calibrate", action="store_true", help="실시간 실제 속도 기반 스로틀 자동 보정 활성화")
+    parser.add_argument("--auto-calibrate", action="store_true", default=True, help="실시간 실제 속도 기반 스로틀 자동 보정 활성화 (기본값: True)")
+    parser.add_argument("--no-auto-calibrate", action="store_false", dest="auto_calibrate", help="자동 보정 비활성화")
     parser.add_argument("--target-velocity", type=float, default=5.0, help="자동 보정 시 목표로 하는 실제 차량 속도 (m/s)")
     parser.add_argument("--auto-calibrate-window", type=float, default=1.0, help="자동 보정 시 평균 속도를 계산할 윈도우 시간 (초)")
     parser.add_argument("--auto-calibrate-increment", type=float, default=-0.001, help="자동 보정 시 한 번에 조절할 스로틀 양")

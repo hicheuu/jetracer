@@ -45,6 +45,10 @@ class NvidiaRacecar(Racecar):
     
     throttle_gain = traitlets.Float(default_value=1.0)
     throttle_channel = traitlets.Integer(default_value=1)
+    speed5_throttle = traitlets.Float(default_value=0.20)
+    
+    # 후진 속도 배율 (기본 0.7로 감속하여 안전성 확보)
+    throttle_reverse_gain = traitlets.Float(default_value=0.7)
     
     # 후진 진입을 위한 물리적 시작점 (기능 활성화를 위해 -0.1 등으로 설정)
     throttle_reverse_start = traitlets.Float(default_value=-0.1)
@@ -75,6 +79,8 @@ class NvidiaRacecar(Racecar):
                 kwargs.setdefault("throttle_gain", throttle.get("gain", 1.0))
                 kwargs.setdefault("throttle_channel", throttle.get("channel", 1))
                 kwargs.setdefault("throttle_reverse_start", throttle.get("reverse_start", -0.1))
+                kwargs.setdefault("speed5_throttle", throttle.get("speed5_throttle", 0.20))
+                kwargs.setdefault("throttle_reverse_gain", throttle.get("reverse_gain", 0.7))
                 self._throttle_neutral = throttle.get("neutral", 0.12)
             
             if "input_to_ms" in config:
@@ -131,9 +137,9 @@ class NvidiaRacecar(Racecar):
             range_fwd = (1.0 - self._throttle_neutral)
             final_throttle = self._throttle_neutral + (input_val * range_fwd * self.throttle_gain)
         else:
-            # 3. 후진
+            # 3. 후진 (reverse_gain 적용)
             range_rev = (-1.0 - self.throttle_reverse_start)
-            final_throttle = self.throttle_reverse_start + (abs(input_val) * range_rev * self.throttle_gain)
+            final_throttle = self.throttle_reverse_start + (abs(input_val) * range_rev * self.throttle_gain * self.throttle_reverse_gain)
         
         # 물리적 한계 클리핑
         final_throttle = max(-1.0, min(1.0, final_throttle))

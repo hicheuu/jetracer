@@ -57,8 +57,8 @@ def parse_args():
     parser.add_argument(
         "--speed5-throttle",
         type=float,
-        required=True,
-        help="속도 5.0일 때의 물리적 스로틀 목표값 (예: 0.35)"
+        default=None,
+        help="속도 5.0일 때의 물리적 스로틀 목표값 (None인 경우 config에서 로드)"
     )
     return parser.parse_args()
 
@@ -85,7 +85,8 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
     steer_thr_gain_left = car.steering_throttle_gain_left
     steer_thr_gain_right = car.steering_throttle_gain_right
     
-    SPEED_5_PHYS = speed5_throttle
+    # SPEED_5_PHYS 설정: 인자로 받지 못한 경우(None) Car 설정값 사용
+    SPEED_5_PHYS = speed5_throttle if speed5_throttle is not None else car.speed5_throttle
     SPEED_1_PHYS = SPEED_5_PHYS - 0.01  
     
     # 캐리브레이션 로깅 설정
