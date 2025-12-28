@@ -134,7 +134,7 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                                 
                                 # 2. 저속/정지 보정 (명령은 5.0인데 실제 1초 평균이 0.5 이하일 때 0.002 가속)
                                 elif speed_cmd >= 4.5 and avg_speed <= 0.5:
-                                    final_delta = 0.002
+                                    final_delta = 0.001
                                     adjust_msg = f"Stall Recovery: Avg1s({avg_speed:.2f}) <= 0.5"
                                     inc_count += 1
 
