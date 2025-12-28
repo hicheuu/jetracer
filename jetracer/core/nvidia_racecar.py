@@ -53,6 +53,8 @@ class NvidiaRacecar(Racecar):
     # 후진 진입을 위한 물리적 시작점 (기능 활성화를 위해 -0.1 등으로 설정)
     throttle_reverse_start = traitlets.Float(default_value=-0.1)
     
+    verbose = traitlets.Bool(default_value=False)
+    
     INPUT_TO_MS = 2.0
     
     def __init__(self, *args, config_path=None, **kwargs):
@@ -147,7 +149,7 @@ class NvidiaRacecar(Racecar):
         
         # 캘리브레이션용 로그 출력
         rounded_phys = round(final_throttle, 3)
-        if self.verbose and rounded_phys != self._last_printed_throttle:
+        if getattr(self, "verbose", False) and rounded_phys != self._last_printed_throttle:
             print(f"[motor] target={input_val:+.3f} | physical_esc={final_throttle:.3f}")
             self._last_printed_throttle = rounded_phys
             
