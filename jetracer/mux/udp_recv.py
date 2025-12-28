@@ -108,8 +108,8 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
                     now = time.time()
 
                     # 4. 실시간 자동 보정 수행 (윈도우 방식)
-                    if auto_calibrate and obs_speed > 0:
-                        # 윈도우에 현재 데이터 추가
+                    if auto_calibrate:
+                        # 윈도우에 현재 데이터 추가 (정지 상태 0.0도 평균에 포함해야 함)
                         speed_window.append((now, obs_speed))
                         
                         # 윈도우 범위를 벗어난 오래된 데이터 제거

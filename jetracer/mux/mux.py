@@ -268,16 +268,20 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                     else:
                         car.throttle = max(-1.0, car.throttle - compensation)
                 
-                if now - last_log_time > 0.5:
-                    log_queue.put({
-                        "type": "LOG", 
-                        "src": "MUX", 
-                        "msg": f"[{src_used}] steer={car.steering:+.2f} thr={car.physical_throttle:.3f} (phys)"
-                    })
-                    last_log_time = now
             else:
                 car.steering = 0.0
                 car.throttle = 0.0
+                src_used = "IDLE"
+
+            # 0.5초 주기로 제어 상태 로그 출력
+            if now - last_log_time > 0.5:
+                # physical_throttle은 NvidiaRacecar의 내부 물리 출력값
+                log_queue.put({
+                    "type": "LOG", 
+                    "src": "MUX", 
+                    "msg": f"[{src_used}] steer={car.steering:+.2f} thr={car.physical_throttle:.3f} (phys)"
+                })
+                last_log_time = now
 
             time.sleep(0.01)
 
