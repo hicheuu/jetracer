@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+import argparse
+import socket
+import struct
+import time
+
 from jetracer.teleop.telemetry_common import (
     infer_car_number,
     read_voltage,
