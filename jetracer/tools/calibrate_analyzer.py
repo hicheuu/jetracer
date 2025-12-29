@@ -11,9 +11,12 @@ TOLERANCE = 0.05      # m/s (Target Speed Control 평가 시 허용 오차)
 
 def analyze_latest_calibration():
     # 1. 가장 최신 로그 파일 찾기
-    log_files = glob.glob("logs/calibration_*.csv")
+    pattern = "logs/calibration_*.csv"
+    log_files = glob.glob(pattern)
     if not log_files:
-        print("Error: No calibration logs found in logs/ directory.")
+        print(f"Error: No calibration logs found in logs/ directory.")
+        print(f"Current Working Directory: {os.getcwd()}")
+        print(f"Search Pattern: {os.path.abspath(pattern)}")
         return
 
     latest_file = max(log_files, key=os.path.getctime)

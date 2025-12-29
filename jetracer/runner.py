@@ -20,6 +20,10 @@ def runner(args):
     """
     MUX, Joystick, UDP 수신 프로세스를 통합 실행하고 로그를 관리합니다.
     """
+    # 만약 --analyze 옵션이 있다면 최소한 로깅은 켜져 있어야 분석 가능
+    if getattr(args, "analyze", False):
+        args.log_calibration = True
+
     # 모든 프로세스의 로그를 수집할 큐
     log_queue = multiprocessing.Queue()
     stop_event = multiprocessing.Event()
