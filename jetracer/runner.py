@@ -212,7 +212,7 @@ if __name__ == "__main__":
     parser.add_argument("--auto-calibrate", action="store_true", default=True, help="실시간 실제 속도 기반 스로틀 자동 보정 활성화 (기본값: True)")
     parser.add_argument("--no-auto-calibrate", action="store_false", dest="auto_calibrate", help="자동 보정 비활성화")
     parser.add_argument("--target-velocity", type=float, default=5.0, help="자동 보정 시 목표로 하는 실제 차량 속도 (m/s)")
-    parser.add_argument("--auto-calibrate-packets", type=int, default=33, help="자동 보정 시 평균 속도를 계산할 패킷 개수 (기본값: 33, 약 1초)")
+    parser.add_argument("--auto-calibrate-packets", type=int, default=16, help="자동 보정 시 평균 속도를 계산할 패킷 개수 (기본값: 16, 약 0.5초)")
     parser.add_argument("--auto-calibrate-increment", type=float, default=default_inc, help=f"자동 보정 시 Stall Recovery 증가량 (기본값: {default_inc})")
     parser.add_argument("--auto-calibrate-decrement", type=float, default=default_dec, help=f"자동 보정 시 Speed Limit 감소량 (기본값: {default_dec})")
     parser.add_argument("--auto-calibrate-threshold", type=float, default=3.2, help="자동 보정이 트리거되는 평균 속도 임계값 (m/s)")
