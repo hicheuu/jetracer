@@ -160,7 +160,9 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
                                             "event": "speed5_adjust", 
                                             "delta": final_delta,
                                             "reason": reason,
-                                            "threshold": threshold_v
+                                            "threshold": threshold_v,
+                                            "inc": shared_inc.value if shared_inc else initial_inc,
+                                            "dec": shared_dec.value if shared_dec else initial_dec
                                         }).encode(),
                                         SOCK_PATH
                                     )
@@ -180,7 +182,9 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
                             "speed": speed_cmd,
                             "obs_speed": obs_speed,
                             "threshold": threshold_v,
-                            "lost_packets": lost_packets
+                            "lost_packets": lost_packets,
+                            "inc": shared_inc.value if shared_inc else initial_inc,
+                            "dec": shared_dec.value if shared_dec else initial_dec
                         }).encode(),
                         SOCK_PATH
                     )

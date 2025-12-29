@@ -27,7 +27,7 @@ def analyze_latest_calibration():
         return
 
     # 3. 방어적 코드: 필수 컬럼 체크
-    required_cols = {'timestamp', 'type', 'obs_value', 'threshold', 'cmd_speed', 'value'}
+    required_cols = {'timestamp', 'type', 'obs_value', 'threshold', 'cmd_speed', 'value', 'inc', 'dec'}
     missing = required_cols - set(df.columns)
     if missing:
         print(f"[ANALYZER] Error: Missing required columns in CSV: {missing}")
@@ -41,7 +41,7 @@ def analyze_latest_calibration():
     start_time = df['timestamp'].iloc[0]
     df['relative_time'] = df['timestamp'] - start_time
 
-    # 4. 데이터 분리
+    # 4. 데이터 분리 및 페이즈 식별
     speed_df = df[df['type'] == 'speed'].copy()
     adjust_df = df[df['type'] == 'auto_adjust'].copy()
 
@@ -49,95 +49,127 @@ def analyze_latest_calibration():
         print("[ANALYZER] Error: No speed data found in log.")
         return
 
+    # 파라미터(inc, dec) 변화를 기준으로 페이즈 할당
+    # inc 또는 dec가 이전 행과 다르면 페이즈 변경
+    df['param_str'] = df['inc'].astype(str) + "_" + df['dec'].astype(str)
+    df['phase_change'] = df['param_str'] != df['param_str'].shift()
+    df['phase_id'] = df['phase_change'].cumsum()
+
+    phases = df.groupby('phase_id')
+
     # 5. 분석 수행
-    print("\n" + "="*50)
-    print(f" [Calibration Analysis Report]")
+    print("\n" + "="*80)
+    print(f" [Calibration Analysis Report - Tuning Phases]")
     print(f" Log File: {os.path.basename(latest_file)}")
-    print("="*50)
+    print("="*80)
+    print(f"{'Phase':<6} | {'Params (Inc/Dec)':<20} | {'Dur(s)':<8} | {'MAE':<8} | {'In-Tol':<8} | {'Loss(%)':<8}")
+    print("-" * 80)
 
-    # (1) Threshold 준수율 및 오차 분석 (다각도 지표)
-    active_speed = speed_df[speed_df['cmd_speed'] >= MIN_CMD_SPEED]
-    if not active_speed.empty:
-        # 오차 계산 (Observed - Threshold)
-        errors = active_speed['obs_value'] - active_speed['threshold']
-        mae = errors.abs().mean()
+    phase_summary = []
+
+    for pid, group in phases:
+        # 해당 페이즈의 속도 데이터 필터링
+        p_speed = group[group['type'] == 'speed']
+        if p_speed.empty:
+            continue
+            
+        p_active = p_speed[p_speed['cmd_speed'] >= MIN_CMD_SPEED]
         
-        # 준수율 정의 개선
-        overshoot_rate = (errors > TOLERANCE).mean() * 100
-        undershoot_rate = (errors < -TOLERANCE).mean() * 100
-        within_range = (errors.abs() <= TOLERANCE).mean() * 100
+        # 지속 시간 (송수신 간격 차분 합산)
+        dt = p_speed['relative_time'].diff().fillna(0)
+        p_duration = dt.sum()
         
-        print(f"1. Target Speed Control (Tolerance ±{TOLERANCE} m/s)")
-        print(f"   - Mean Absolute Error: {mae:.4f} m/s")
-        print(f"   - In Range (±Tol): {within_range:.1f}%")
-        print(f"   - Overshoot (>Tol): {overshoot_rate:.1f}%")
-        print(f"   - Undershoot (<Tol): {undershoot_rate:.1f}%")
-        print(f"   - Max Overshoot: {errors.max():.4f} m/s")
+        # 너무 짧은 페이즈(0.5초 미만)는 통계 노이즈로 간주하여 요약에서 제외 (선택 사항)
+        if p_duration < 0.5:
+            continue
+
+        inc_val = group['inc'].iloc[0]
+        dec_val = group['dec'].iloc[0]
+        
+        mae = 0.0
+        within_range = 0.0
+        if not p_active.empty:
+            errors = p_active['obs_value'] - p_active['threshold']
+            mae = errors.abs().mean()
+            within_range = (errors.abs() <= TOLERANCE).mean() * 100
+        
+        # 패킷 손실
+        p_lost = group['lost_packets'].sum() if 'lost_packets' in group.columns else 0
+        p_total = len(group) + p_lost
+        p_loss_rate = (p_lost / p_total * 100) if p_total > 0 else 0
+        
+        print(f"{pid:<6} | {inc_val:.4f}/{dec_val:.4f} | {p_duration:<8.2f} | {mae:<8.4f} | {within_range:<8.1f} | {p_loss_rate:<8.2f}")
+        
+        phase_summary.append({
+            'pid': pid,
+            'start_time': group['relative_time'].iloc[0],
+            'end_time': group['relative_time'].iloc[-1],
+            'params': f"Inc:{inc_val:.4f}, Dec:{dec_val:.4f}",
+            'inc': inc_val,
+            'dec': dec_val
+        })
+
+    print("="*80)
     
-    # (2) 보정 이벤트 및 패킷 손실
-    stall_events = adjust_df[adjust_df['reason'] == 'stall_recovery']
-    limit_events = adjust_df[adjust_df['reason'] == 'speed_limit']
+    # 전체 요약
     total_lost = df['lost_packets'].sum() if 'lost_packets' in df.columns else 0
-    total_packets = len(df) + total_lost
-    loss_rate = (total_lost / total_packets * 100) if total_packets > 0 else 0
-    
-    print(f"\n2. Network & Events")
-    print(f"   - Total Adjustments: {len(adjust_df)}")
-    print(f"   - Stall Recovery (UP): {len(stall_events)} times")
-    print(f"   - Speed Limit (DOWN): {len(limit_events)} times")
-    print(f"   - Total Packet Loss: {int(total_lost)} packets ({loss_rate:.2f}%)")
-
-    # (3) Stall Recovery 효율성 (시간 기반 계산)
-    stalls = active_speed[active_speed['obs_value'] <= 0.5]
-    if not stalls.empty:
-        # 시간 기반 계산: 마지막 스톨 - 첫 스톨 (단순 합산이 아닌 전체 구간 파악 시)
-        # 여기서는 송수신 간격 차분을 합산하여 실제 "활동 시간" 중 스톨 시간을 계산
-        dt = active_speed['relative_time'].diff().fillna(0)
-        stall_mask = active_speed['obs_value'] <= 0.5
-        total_stall_time = dt[stall_mask].sum()
-        
-        print(f"\n3. Stall Analysis (Obs < 0.5 m/s)")
-        print(f"   - Total Stalled Duration: {total_stall_time:.2f} s")
-        if not stall_events.empty:
-            print(f"   - Recovery Efficiency: {len(stall_events)/total_stall_time:.2f} adjustments/sec during stall")
-    print("="*50 + "\n")
+    print(f" Total Packet Loss: {int(total_lost)} packets ({(total_lost/(len(df)+total_lost)*100):.2f}%)")
+    print("="*80 + "\n")
 
     # 6. 시각화 개선
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
 
     # [Top Plot: Speed]
-    ax1.plot(speed_df['relative_time'], speed_df['cmd_speed'], label='Command Speed (m/s)', color='gray', alpha=0.4, linestyle='--')
-    ax1.plot(speed_df['relative_time'], speed_df['threshold'], label='Threshold_V', color='red', alpha=0.8, linewidth=1)
-    ax1.plot(speed_df['relative_time'], speed_df['obs_value'], label='Observed Speed (m/s)', color='green', linewidth=2)
+    ax1.plot(speed_df['relative_time'], speed_df['cmd_speed'], label='Command Speed (m/s)', color='gray', alpha=0.3, linestyle='--')
+    ax1.plot(speed_df['relative_time'], speed_df['threshold'], label='Threshold_V', color='red', alpha=0.7, linewidth=1)
+    ax1.plot(speed_df['relative_time'], speed_df['obs_value'], label='Observed Speed (m/s)', color='green', linewidth=1.5)
     
     # Tolerance band
     ax1.fill_between(speed_df['relative_time'], 
                      speed_df['threshold'] - TOLERANCE, 
                      speed_df['threshold'] + TOLERANCE, 
-                     color='red', alpha=0.1, label=f'Tolerance ±{TOLERANCE}')
+                     color='red', alpha=0.05)
 
-    # 이벤트 시각화 (Y좌표를 threshold에 맞춰 직관성 개선)
+    # 페이즈 구분선 및 텍스트
+    for p in phase_summary:
+        ax1.axvline(x=p['start_time'], color='black', alpha=0.3, linestyle=':', linewidth=1)
+        # 페이즈 상단에 파라미터 정보 표시 (겹치지 않게 조절 필요할 수 있음)
+        ax1.text(p['start_time'] + 0.1, ax1.get_ylim()[1] * 0.9, f"P{p['pid']}\n{p['inc']:.4f}\n{p['dec']:.4f}", 
+                 fontsize=8, verticalalignment='top', alpha=0.7)
+
+    # 이벤트 시각화
+    stall_events = adjust_df[adjust_df['reason'] == 'stall_recovery']
+    limit_events = adjust_df[adjust_df['reason'] == 'speed_limit']
+    
     if not stall_events.empty:
-        ax1.scatter(stall_events['relative_time'], [0.2]*len(stall_events), color='blue', label='Stall Recovery (UP)', marker='^', s=40)
-        # Stall 지점에 vertical line 추가 (선택)
-        for t in stall_events['relative_time']:
-            ax1.axvline(x=t, color='blue', alpha=0.1, linewidth=0.5)
+        ax1.scatter(stall_events['relative_time'], [0.2]*len(stall_events), color='blue', label='Stall Recovery (UP)', marker='^', s=30, alpha=0.6)
     
     if not limit_events.empty:
-        ax1.scatter(limit_events['relative_time'], limit_events['threshold'], color='darkred', label='Speed Limit (DOWN)', marker='v', s=40)
+        ax1.scatter(limit_events['relative_time'], limit_events['threshold'], color='darkred', label='Speed Limit (DOWN)', marker='v', s=30, alpha=0.6)
 
     ax1.set_title(f"Speed Calibration Analysis: {os.path.basename(latest_file)}")
     ax1.set_ylabel("Speed (m/s)")
-    ax1.legend(loc='upper right', fontsize='small', ncol=2)
-    ax1.grid(True, alpha=0.2)
+    ax1.legend(loc='upper right', fontsize='x-small', ncol=2)
+    ax1.grid(True, alpha=0.1)
 
-    # [Bottom Plot: Physical Throttle]
-    ax2.plot(speed_df['relative_time'], speed_df['value'], label='Physical Throttle (SPEED_5_PHYS)', color='orange', linewidth=2)
-    ax2.set_title("Throttle Calibration Progression")
+    # [Bottom Plot: Physical Throttle & Params]
+    ax2.plot(speed_df['relative_time'], speed_df['value'], label='SPEED_5_PHYS (Throttle)', color='orange', linewidth=2)
+    
+    # inc/dec 변화를 보조 축으로 그리기 (선택)
+    ax2_twin = ax2.twinx()
+    ax2_twin.step(speed_df['relative_time'], speed_df['inc'], where='post', label='Increment', color='blue', alpha=0.3)
+    ax2_twin.step(speed_df['relative_time'], speed_df['dec'].abs(), where='post', label='|Decrement|', color='purple', alpha=0.3)
+    ax2_twin.set_ylabel("Param Magnitude")
+    
+    ax2.set_title("Throttle progression & Parameter changes")
     ax2.set_xlabel("Time (seconds)")
-    ax2.set_ylabel("Value")
-    ax2.legend(loc='upper right')
-    ax2.grid(True, alpha=0.2)
+    ax2.set_ylabel("Throttle Value")
+    
+    # 범례 합치기
+    lines, labels = ax2.get_legend_handles_labels()
+    lines2, labels2 = ax2_twin.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc='upper right', fontsize='x-small')
+    ax2.grid(True, alpha=0.1)
 
     plt.tight_layout()
     
