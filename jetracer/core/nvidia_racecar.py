@@ -53,6 +53,10 @@ class NvidiaRacecar(Racecar):
     # 후진 진입을 위한 물리적 시작점 (기능 활성화를 위해 -0.1 등으로 설정)
     throttle_reverse_start = traitlets.Float(default_value=-0.1)
     
+    # 자동 보정 파라미터 (UDP 모드용)
+    auto_calibrate_increment = traitlets.Float(default_value=0.001)
+    auto_calibrate_decrement = traitlets.Float(default_value=-0.001)
+    
     verbose = traitlets.Bool(default_value=False)
     
     INPUT_TO_MS = 2.0
@@ -83,6 +87,8 @@ class NvidiaRacecar(Racecar):
                 kwargs.setdefault("throttle_reverse_start", throttle.get("reverse_start", -0.1))
                 kwargs.setdefault("speed5_throttle", throttle.get("speed5_throttle", 0.20))
                 kwargs.setdefault("throttle_reverse_gain", throttle.get("reverse_gain", 0.7))
+                kwargs.setdefault("auto_calibrate_increment", throttle.get("auto_calibrate_increment", 0.001))
+                kwargs.setdefault("auto_calibrate_decrement", throttle.get("auto_calibrate_decrement", -0.001))
                 self._throttle_neutral = throttle.get("neutral", 0.12)
             
             if "input_to_ms" in config:

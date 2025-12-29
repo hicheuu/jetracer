@@ -13,7 +13,9 @@
     "neutral": 0.21,
     "speed5_throttle": 0.35,
     "reverse_start": -0.1,
-    "reverse_gain": 0.7
+    "reverse_gain": 0.7,
+    "auto_calibrate_increment": 0.001,
+    "auto_calibrate_decrement": -0.001
   },
   "input_to_ms": 2.0
 }

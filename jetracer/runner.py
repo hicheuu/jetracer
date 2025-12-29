@@ -8,6 +8,7 @@ import os
 from jetracer.mux.mux import run_mux
 from jetracer.mux.joystick import run_joystick
 from jetracer.mux.udp_recv import run_udp
+from jetracer.core.nvidia_racecar import load_config
 
 try:
     import msvcrt
@@ -162,6 +163,13 @@ def runner(args):
         if p_udp.is_alive(): p_udp.terminate()
 
 if __name__ == "__main__":
+    # 설정 파일에서 기본값 로드
+    config = load_config()
+    thr_config = config.get("throttle", {}) if config else {}
+    
+    default_inc = thr_config.get("auto_calibrate_increment", 0.001)
+    default_dec = thr_config.get("auto_calibrate_decrement", -0.001)
+
     parser = argparse.ArgumentParser(description="Jetracer Unified Runner (Normalized Control)")
     
     # 공통 제어 인자
@@ -173,8 +181,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-auto-calibrate", action="store_false", dest="auto_calibrate", help="자동 보정 비활성화")
     parser.add_argument("--target-velocity", type=float, default=5.0, help="자동 보정 시 목표로 하는 실제 차량 속도 (m/s)")
     parser.add_argument("--auto-calibrate-window", type=float, default=1.0, help="자동 보정 시 평균 속도를 계산할 윈도우 시간 (초)")
-    parser.add_argument("--auto-calibrate-increment", type=float, default=0.001, help="자동 보정 시 Stall Recovery 증가량 (기본값: 0.001)")
-    parser.add_argument("--auto-calibrate-decrement", type=float, default=-0.001, help="자동 보정 시 Speed Limit 감소량 (기본값: -0.001)")
+    parser.add_argument("--auto-calibrate-increment", type=float, default=default_inc, help=f"자동 보정 시 Stall Recovery 증가량 (기본값: {default_inc})")
+    parser.add_argument("--auto-calibrate-decrement", type=float, default=default_dec, help=f"자동 보정 시 Speed Limit 감소량 (기본값: {default_dec})")
     parser.add_argument("--auto-calibrate-threshold", type=float, default=3.2, help="자동 보정이 트리거되는 평균 속도 임계값 (m/s)")
     parser.add_argument("--quiet-udp", action="store_true", help="UDP 모드 루틴 로그 숨기기 (에러/자동보정 요약은 표시)")
     parser.add_argument("--log-motor", action="store_true", help="모터 물리 신호 로그([motor]) 활성화")
