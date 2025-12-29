@@ -8,6 +8,7 @@ import os
 from jetracer.mux.mux import run_mux
 from jetracer.mux.joystick import run_joystick
 from jetracer.mux.udp_recv import run_udp
+from jetracer.teleop.udp_send_telemetry import run_telemetry
 from jetracer.core.nvidia_racecar import load_config
 
 try:
@@ -64,6 +65,19 @@ def runner(args):
     )
     p_udp.start()
 
+    # 4. Telemetry 송신 프로세스
+    p_tele = multiprocessing.Process(
+        target=run_telemetry,
+        args=(stop_event,),
+        kwargs={
+            "server_ip": args.telemetry_ip,
+            "hz": args.telemetry_hz,
+            "car_number": args.car_number,
+            "verbose": args.log_telemetry
+        }
+    )
+    p_tele.start()
+
     print("[RUNNER] 모든 제어 프로세스가 시작되었습니다.")
     print("[RUNNER] 조이스틱 RB/LB 버튼으로 SPEED5 ±0.001 조절")
     print("[RUNNER] 키보드 't' : 보정 대상(Increment/Decrement) 변경")
@@ -111,7 +125,7 @@ def runner(args):
                     break
             
             # 메인 프로세스 생존 확인
-            for name, p in [("MUX", p_mux), ("JOY", p_joy), ("UDP", p_udp)]:
+            for name, p in [("MUX", p_mux), ("JOY", p_joy), ("UDP", p_udp), ("TELE", p_tele)]:
                 if not p.is_alive():
                     print(f"\n[RUNNER] {name} 프로세스가 예기치 않게 종료되었습니다.")
                     stop_event.set()
@@ -160,11 +174,13 @@ def runner(args):
         p_mux.join(timeout=1)
         p_joy.join(timeout=1)
         p_udp.join(timeout=1)
+        p_tele.join(timeout=1)
         
         # 종료되지 않은 프로세스 강제 종료
         if p_mux.is_alive(): p_mux.terminate()
         if p_joy.is_alive(): p_joy.terminate()
         if p_udp.is_alive(): p_udp.terminate()
+        if p_tele.is_alive(): p_tele.terminate()
         
         # 분석 도구 실행 (옵션 활성화 시)
         if getattr(args, "analyze", False):
@@ -203,6 +219,10 @@ if __name__ == "__main__":
     parser.add_argument("--analyze", action="store_true", help="프로그램 종료 후 자동으로 캘리브레이션 데이터 분석 및 시각화 수행")
     parser.add_argument("--quiet-udp", action="store_true", help="UDP 모드 루틴 로그 숨기기 (에러/자동보정 요약은 표시)")
     parser.add_argument("--log-motor", action="store_true", help="모터 물리 신호 로그([motor]) 활성화")
+    parser.add_argument("--telemetry-ip", default="192.168.0.100", help="텔레메트리 서버 IP")
+    parser.add_argument("--telemetry-hz", type=float, default=30.0, help="텔레메트리 전송 주기 (Hz)")
+    parser.add_argument("--car-number", type=int, default=None, help="차량 번호 (None이면 ID에서 유추)")
+    parser.add_argument("--log-telemetry", action="store_true", help="텔레메트리 전송 로그 활성화")
     
     args = parser.parse_args()
     

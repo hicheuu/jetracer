@@ -30,7 +30,7 @@ def analyze_latest_calibration():
         return
 
     # 3. 방어적 코드: 필수 컬럼 체크
-    required_cols = {'timestamp', 'type', 'obs_value', 'threshold', 'cmd_speed', 'value', 'inc', 'dec'}
+    required_cols = {'timestamp', 'type', 'obs_value', 'threshold', 'cmd_speed', 'value', 'inc', 'dec', 'battery'}
     missing = required_cols - set(df.columns)
     if missing:
         print(f"[ANALYZER] Error: Missing required columns in CSV: {missing}")
@@ -43,6 +43,16 @@ def analyze_latest_calibration():
     # 첫 번째 타임스탬프를 기준으로 0초부터 시작하도록 변환
     start_time = df['timestamp'].iloc[0]
     df['relative_time'] = df['timestamp'] - start_time
+
+    # [SPIKE SUPPRESSION] 인지 스파이크 제거 (3->4.5->3 처럼 튀는 값 생략)
+    # rolling median filter 또는 주변 값과의 대소 비교
+    if len(df) > 2:
+        # 관측 속도(obs_value)가 주변 값에 비해 너무 크면(예: 1.0 m/s 이상 차이) 보간 처리
+        # shift(-1)과 shift(1)의 평균과 비교
+        neighbor_avg = (df['obs_value'].shift(1) + df['obs_value'].shift(-1)) / 2
+        spike_mask = (df['obs_value'] > neighbor_avg + 1.2) & (df['obs_value'] > df['threshold'] + 0.5)
+        # 스파이크인 경우 주변 평균값으로 대체 (시각화 및 지표용)
+        df.loc[spike_mask, 'obs_value'] = neighbor_avg[spike_mask]
 
     # 4. 데이터 분리 및 페이즈 식별
     speed_df = df[df['type'] == 'speed'].copy()
@@ -65,7 +75,7 @@ def analyze_latest_calibration():
     print(f" [Calibration Analysis Report - Tuning Phases]")
     print(f" Log File: {os.path.basename(latest_file)}")
     print("="*80)
-    print(f"{'Phase':<6} | {'Params (Inc/Dec)':<20} | {'Dur(s)':<8} | {'MAE':<8} | {'In-Tol':<8} | {'Loss(%)':<8}")
+    print(f"{'Phase':<6} | {'Params (Inc/Dec)':<20} | {'Dur(s)':<8} | {'MAE':<8} | {'Stable':<8} | {'Loss(%)':<8}")
     print("-" * 80)
 
     phase_summary = []
@@ -90,18 +100,19 @@ def analyze_latest_calibration():
         dec_val = group['dec'].iloc[0]
         
         mae = 0.0
-        within_range = 0.0
+        stable_pct = 0.0 # No Overshoot Metric
         if not p_active.empty:
             errors = p_active['obs_value'] - p_active['threshold']
             mae = errors.abs().mean()
-            within_range = (errors.abs() <= TOLERANCE).mean() * 100
+            # Stable: 목표치를 초과하지 않은 비율 (obs <= threshold + TOLERANCE)
+            stable_pct = (p_active['obs_value'] <= p_active['threshold'] + TOLERANCE).mean() * 100
         
         # 패킷 손실
         p_lost = group['lost_packets'].sum() if 'lost_packets' in group.columns else 0
         p_total = len(group) + p_lost
         p_loss_rate = (p_lost / p_total * 100) if p_total > 0 else 0
         
-        print(f"{pid:<6} | {inc_val:.4f}/{dec_val:.4f} | {p_duration:<8.2f} | {mae:<8.4f} | {within_range:<8.1f} | {p_loss_rate:<8.2f}")
+        print(f"{pid:<6} | {inc_val:.4f}/{dec_val:.4f} | {p_duration:<8.2f} | {mae:<8.4f} | {stable_pct:<8.1f} | {p_loss_rate:<8.2f}")
         
         phase_summary.append({
             'pid': pid,
@@ -109,18 +120,25 @@ def analyze_latest_calibration():
             'end_time': group['relative_time'].iloc[-1],
             'params': f"Inc:{inc_val:.4f}, Dec:{dec_val:.4f}",
             'inc': inc_val,
-            'dec': dec_val
+            'dec': dec_val,
+            'stable': stable_pct,
+            'duration': p_duration
         })
 
     print("="*80)
     
     # 전체 요약
     total_lost = df['lost_packets'].sum() if 'lost_packets' in df.columns else 0
+    v_start = df['battery'].iloc[0]
+    v_end = df['battery'].iloc[-1]
+    total_duration = df['relative_time'].iloc[-1]
+    
     print(f" Total Packet Loss: {int(total_lost)} packets ({(total_lost/(len(df)+total_lost)*100):.2f}%)")
+    print(f" Battery Status: {v_start:.2f}V -> {v_end:.2f}V (Delta: {v_end-v_start:+.2f}V)")
     print("="*80 + "\n")
 
     # 6. 시각화 개선
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
 
     # [Top Plot: Speed]
     ax1.plot(speed_df['relative_time'], speed_df['cmd_speed'], label='Command Speed (m/s)', color='gray', alpha=0.3, linestyle='--')
@@ -174,6 +192,13 @@ def analyze_latest_calibration():
     ax2.legend(lines + lines2, labels + labels2, loc='upper right', fontsize='x-small')
     ax2.grid(True, alpha=0.1)
 
+    # [Plot 3: Battery Voltage]
+    ax3.plot(df['relative_time'], df['battery'], color='teal', label='Battery Voltage (V)', linewidth=2)
+    ax3.set_ylabel("Voltage (V)")
+    ax3.set_ylim(min(df['battery'])-0.2, max(df['battery'])+0.2)
+    ax3.grid(True, alpha=0.1)
+    ax3.legend(loc='upper right', fontsize='x-small')
+
     plt.tight_layout()
     
     # 결과 저장
@@ -181,6 +206,24 @@ def analyze_latest_calibration():
     plt.savefig(output_path)
     print(f"[ANALYZER] Visualization saved to: {os.path.abspath(output_path)}")
     
+    # [NEW] 파일명 변경 (incresemet, decresement, 주행시간, stable_pct, 배터리)
+    # ex: calib_in10_de-10_dur120_stable95_v8.4-8.2.csv
+    try:
+        final_inc = df['inc'].iloc[-1]
+        final_dec = df['dec'].iloc[-1]
+        # in:10 꼴로 변환 (0.001 -> 10)
+        in_tag = int(final_inc * 10000)
+        de_tag = int(final_dec * 10000)
+        
+        # 마지막 페이즈의 Stable 지표 가져오기
+        last_stable = phase_summary[-1]['stable'] if phase_summary else 0
+        
+        new_name = f"logs/calib_in{in_tag}_de{de_tag}_dur{int(total_duration)}_stable{int(last_stable)}_v{v_start:.1f}-{v_end:.1f}.csv"
+        os.rename(latest_file, new_name)
+        print(f"[ANALYZER] Log file renamed to: {new_name}")
+    except Exception as e:
+        print(f"[ANALYZER] Error renaming file: {e}")
+
     try:
         plt.show()
     except:
