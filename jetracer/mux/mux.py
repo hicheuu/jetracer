@@ -201,17 +201,22 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                 if src == "joystick":
                     last_joy = msg
                 elif src == "udp":
-                    last_udp = msg
-                    if csv_writer and "speed" in msg:
-                        obs_sp = msg.get("obs_speed", 0.0)
-                        cmd_sp = msg.get("speed", 0.0)
-                        thr = msg.get("threshold", 0.0)
-                        lost = msg.get("lost_packets", 0)
-                        cur_inc = msg.get("inc", 0.0)
-                        cur_dec = msg.get("dec", 0.0)
-                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec
-                        # value 컬럼에 현재 튜닝 대상인 SPEED_5_PHYS 기록
-                        csv_writer.writerow([time.time(), "speed", SPEED_5_PHYS, "", obs_sp, cmd_sp, thr, "", lost, cur_inc, cur_dec])
+                    # 'event'가 들어오는 보정/타임아웃 메시지는 control last_udp를 갱신하지 않음
+                    if "steer" in msg and "speed" in msg:
+                        last_udp = msg
+                        global last_udp_time
+                        last_udp_time = time.time()
+                        
+                        if csv_writer and "speed" in msg:
+                            obs_sp = msg.get("obs_speed", 0.0)
+                            cmd_sp = msg.get("speed", 0.0)
+                            thr = msg.get("threshold", 0.0)
+                            lost = msg.get("lost_packets", 0)
+                            cur_inc = msg.get("inc", 0.0)
+                            cur_dec = msg.get("dec", 0.0)
+                            # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec
+                            # value 컬럼에 현재 튜닝 대상인 SPEED_5_PHYS 기록
+                            csv_writer.writerow([time.time(), "speed", SPEED_5_PHYS, "", obs_sp, cmd_sp, thr, "", lost, cur_inc, cur_dec])
 
             except BlockingIOError:
                 pass
@@ -229,14 +234,14 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
             cmd = None
             src_used = None
 
-            if mode == "udp" and last_udp and now - last_udp["ts"] < UDP_TIMEOUT:
+            if mode == "udp" and last_udp and now - last_udp.get("ts", 0) < UDP_TIMEOUT:
                 cmd = last_udp
                 src_used = "UDP"
-            elif mode == "joystick" and last_joy and now - last_joy["ts"] < JOY_TIMEOUT:
+            elif mode == "joystick" and last_joy and now - last_joy.get("ts", 0) < JOY_TIMEOUT:
                 cmd = last_joy
                 src_used = "JOY"
 
-            if cmd:
+            if cmd and "steer" in cmd:
                 car.steering = cmd["steer"]
                 
                 if "speed" in cmd:

@@ -168,8 +168,9 @@ def runner(args):
             try:
                 from jetracer.tools.calibrate_analyzer import analyze_latest_calibration
                 analyze_latest_calibration()
-            except ImportError:
-                print("[RUNNER] Error: 분석 도구(calibrate_analyzer.py)를 불러올 수 없습니다.")
+            except ImportError as e:
+                print(f"[RUNNER] Error: 분석 도구(calibrate_analyzer.py)를 불러올 수 없습니다. (사유: {e})")
+                print("[RUNNER] 'pip install pandas matplotlib numpy'가 설치되어 있는지 확인하세요.")
             except Exception as e:
                 print(f"[RUNNER] 분석 도구 실행 중 오류 발생: {e}")
 

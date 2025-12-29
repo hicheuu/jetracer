@@ -43,8 +43,9 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
 
     # 수신용 UDP 소켓 생성 및 바인딩
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((UDP_IP, UDP_PORT))
-    sock.setblocking(False)
+    sock.settimeout(1.0) # 1초 타임아웃
 
     log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Listening on {UDP_IP}:{UDP_PORT}"})
     log_queue.put({"type": "LOG", "src": "UDP", "msg": f"DEBUG: auto_calibrate={auto_calibrate}, target={target_velocity}, threshold={kwargs.get('threshold')}"})
@@ -76,18 +77,19 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
             
             # 1초 주기 하트비트 진단 로그 (데이터 수신 여부와 상관없이 출력)
             if now - last_diag_time > 1.0:
-                avg_1s = sum([s for t, s in speed_window]) / len(speed_window) if speed_window else 0.0
+                avg_1s = sum(speed_window) / len(speed_window) if speed_window else 0.0
+                rx_diff = now - last_rx_time
                 log_queue.put({
                     "type": "LOG", 
                     "src": "UDP", 
-                    "msg": f"[DIAG] Alive. Calib={auto_calibrate} Win={len(speed_window)} Avg1s={avg_1s:.2f} last_rx={now-last_rx_time:.1f}s"
+                    "msg": f"[DIAG] Alive. Calib={auto_calibrate} Win={len(speed_window)} Avg1s={avg_1s:.2f} last_rx={rx_diff:.1f}s"
                 })
                 last_diag_time = now
 
             try:
-                # 비블로킹 방식으로 UDP 패킷 수신
+                # 패킷 수신 (1.0s 타임아웃 적용됨)
                 data, _ = sock.recvfrom(64)
-
+                
                 # ROS 송신부 포맷 대응: !fifi (16 bytes) 또는 !fffI (16 bytes)
                 if len(data) >= 16:
                     # 1. 일단 !fffI (float speed)로 시도
@@ -99,20 +101,20 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
                         try:
                             s1, s2, s3, s4 = struct.unpack("!fifi", data[:16])
                         except:
-                            pass # 실패 시 v1,v2,v3,v4 유지
+                            pass 
 
                     raw_steer, raw_speed, obs_speed, seq = s1, s2, s3, s4
 
                     # 패킷 누락 감지 (Sequence Number 추적)
                     lost_packets = 0
                     if last_seq is not None:
-                        expected = (last_seq + 1) & 0xFFFFFFFF # 32bit wrap-around 고려
+                        expected = (last_seq + 1) & 0xFFFFFFFF
                         if seq != expected:
                             lost_packets = (seq - expected) & 0xFFFFFFFF
-                            if lost_packets < 1000: # 비정상적으로 큰 값은 무시 (재시작 등)
-                                log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Packet loss detected: {lost_packets} packets (seq {last_seq}->{seq})"})
+                            if lost_packets < 1000:
+                                log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Packet loss detected: {lost_packets} packets"})
                             else:
-                                lost_packets = 0 # 예외 케이스 초기화
+                                lost_packets = 0
                     last_seq = seq
 
                     if not math.isfinite(raw_speed):
@@ -121,17 +123,12 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
                     steer_cmd = clamp(raw_steer * STEER_GAIN, -1.0, 1.0)
                     speed_cmd = float(raw_speed)
 
-                    now = time.time()
-
                     # 4. 실시간 자동 보정 수행 (패킷 카운트 방식)
                     if auto_calibrate:
-                        # 윈도우에 현재 데이터 추가 (deque maxlen에 의해 자동 관리됨)
                         speed_window.append(obs_speed)
                         packet_counter += 1
                         
-                        # 차량에 명령 속도가 들어오고 있을 때만 판단 (0.5 m/s 이상)
                         if speed_cmd >= 0.5:
-                            # 33개 패킷(약 1초)이 쌓였다면 보정 로직 실행
                             if packet_counter >= window_len:
                                 avg_speed = sum(speed_window) / len(speed_window)
                                 
@@ -139,14 +136,11 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
                                 final_delta = 0.0
                                 reason = ""
 
-                                # 1. 과속 보정 (임계값 3.2 초과 시 감속)
                                 if avg_speed > threshold_v:
                                     final_delta = shared_dec.value if shared_dec else initial_dec
                                     adjust_msg = f"Speed Limit: Avg({avg_speed:.2f}) > {threshold_v}"
                                     reason = "speed_limit"
                                     dec_count += 1
-                                
-                                # 2. 저속/정지 보정 (명령은 4.5 이상인데 실제 평균이 0.5 이하일 때 가속)
                                 elif speed_cmd >= 4.5 and avg_speed <= 0.5:
                                     final_delta = shared_inc.value if shared_inc else initial_inc
                                     adjust_msg = f"Stall Recovery: Avg({avg_speed:.2f}) <= 0.5"
@@ -156,63 +150,44 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
                                 if final_delta != 0.0:
                                     udsock.sendto(
                                         json.dumps({
-                                            "src": "auto", 
-                                            "event": "speed5_adjust", 
-                                            "delta": final_delta,
-                                            "reason": reason,
-                                            "threshold": threshold_v,
+                                            "src": "auto", "event": "speed5_adjust", "delta": final_delta,
+                                            "reason": reason, "threshold": threshold_v,
                                             "inc": shared_inc.value if shared_inc else initial_inc,
                                             "dec": shared_dec.value if shared_dec else initial_dec
-                                        }).encode(),
-                                        SOCK_PATH
+                                        }).encode(), SOCK_PATH
                                     )
-                                    log_queue.put({
-                                        "type": "LOG", 
-                                        "src": "UDP", 
-                                        "msg": f"Auto-Calib: {adjust_msg} -> Adjust {final_delta:+.5f}"
-                                    })
+                                    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Auto-Calib: {adjust_msg}"})
                                 
-                                packet_counter = 0 # 카운터 초기화
+                                packet_counter = 0 
 
-                    # 5. MUX에 제어 메시지 송신 (분석을 위해 cmd_speed, threshold, lost_packets 포함)
+                    # 5. MUX에 제어 메시지 송신
                     udsock.sendto(
                         json.dumps({
-                            "src": "udp",
-                            "steer": steer_cmd,
-                            "speed": speed_cmd,
-                            "obs_speed": obs_speed,
-                            "threshold": threshold_v,
-                            "lost_packets": lost_packets,
+                            "src": "udp", "steer": steer_cmd, "speed": speed_cmd, "obs_speed": obs_speed,
+                            "threshold": threshold_v, "lost_packets": lost_packets,
                             "inc": shared_inc.value if shared_inc else initial_inc,
                             "dec": shared_dec.value if shared_dec else initial_dec
-                        }).encode(),
-                        SOCK_PATH
+                        }).encode(), SOCK_PATH
                     )
 
                     last_rx_time = time.time()
-                    now = time.time()
-
-                    # 0.5초 주기로 로그 출력
                     if now - last_log_time > 0.5:
                         log_queue.put({
-                            "type": "LOG",
-                            "src": "UDP",
-                            "msg": f"seq={seq:<5} cmd_speed={speed_cmd:.2f} obs_speed={obs_speed:.3f} steer={steer_cmd:+.3f}"
+                            "type": "LOG", "src": "UDP",
+                            "msg": f"seq={seq:<5} cmd={speed_cmd:.2f} obs={obs_speed:.3f}"
                         })
                         last_log_time = now
 
+            except socket.timeout:
+                udsock.sendto(json.dumps({"src": "udp", "event": "timeout"}).encode(), SOCK_PATH)
+                continue
             except BlockingIOError:
                 pass
-            except struct.error as e:
-                 log_queue.put({"type": "LOG", "src": "UDP", "msg": f"struct error: {e}"})
             except Exception as e:
-                log_queue.put({"type": "LOG", "src": "UDP", "msg": f"CRITICAL LOOP ERROR: {e}"})
-                time.sleep(0.1)
-
-            # Watchdog: 일정 시간 동안 수신이 없으면 경고
-            if time.time() - last_rx_time > WATCHDOG_TIMEOUT:
-                last_rx_time = time.time()
-                log_queue.put({"type": "LOG", "src": "UDP", "msg": "watchdog timer triggered"})
+                if now - last_log_time > 0.5:
+                    log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Step Error: {e}"})
+                    last_log_time = now
+                continue
 
             time.sleep(0.005)
 
