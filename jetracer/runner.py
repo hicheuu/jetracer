@@ -215,7 +215,7 @@ if __name__ == "__main__":
     parser.add_argument("--auto-calibrate-packets", type=int, default=8, help="자동 보정 시 평균 속도를 계산할 패킷 개수 (기본값: 8, 약 0.25초)")
     parser.add_argument("--auto-calibrate-increment", type=float, default=default_inc, help=f"자동 보정 시 Stall Recovery 증가량 (기본값: {default_inc})")
     parser.add_argument("--auto-calibrate-decrement", type=float, default=default_dec, help=f"자동 보정 시 Speed Limit 감소량 (기본값: {default_dec})")
-    parser.add_argument("--auto-calibrate-threshold", type=float, default=3.2, help="자동 보정이 트리거되는 평균 속도 임계값 (m/s)")
+    parser.add_argument("--auto-calibrate-threshold", type=float, default=3.0, help="자동 보정이 트리거되는 평균 속도 임계값 (m/s)")
     parser.add_argument("--analyze", action="store_true", help="프로그램 종료 후 자동으로 캘리브레이션 데이터 분석 및 시각화 수행")
     parser.add_argument("--quiet-udp", action="store_true", help="UDP 모드 루틴 로그 숨기기 (에러/자동보정 요약은 표시)")
     parser.add_argument("--log-motor", action="store_true", help="모터 물리 신호 로그([motor]) 활성화")

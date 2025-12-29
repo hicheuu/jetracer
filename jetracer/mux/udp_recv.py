@@ -63,7 +63,7 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
     # 초기값은 kwargs에서 가져오되, 루프 내에서는 shared_inc/dec를 참조함
     initial_inc = kwargs.get("increment", 0.001)   # Stall Recovery용
     initial_dec = kwargs.get("decrement", -0.001)  # Speed Limit용
-    threshold_v = kwargs.get("threshold", 3.2)
+    threshold_v = kwargs.get("threshold", 3.0)
     
     last_seq = None
     packet_counter = 0     # 1Hz 보정 주기를 맞추기 위한 카운터
