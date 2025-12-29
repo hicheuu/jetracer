@@ -34,7 +34,7 @@ def clamp(n, minn, maxn):
     return max(min(maxn, n), minn)
 
 
-def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **kwargs):
+def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, shared_inc=None, shared_dec=None, **kwargs):
     """
     UDP 패킷을 수신하여 추상화된 제어 명령(스티어링, 속도)으로 변환 후 MUX로 전달합니다.
     """
@@ -57,9 +57,10 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
     from collections import deque
     speed_window = deque()
     # 보정 주기 및 윈도우 시간 (runner.py에서 전달받은 값 사용)
-    # kwargs가 없으면 기본값 적용 (3.0s, 0.005, 4.5 m/s)
     window_s = kwargs.get("window_duration", 3.0)
-    adjust_delta = kwargs.get("increment", -0.005)
+    # 초기값은 kwargs에서 가져오되, 루프 내에서는 shared_inc/dec를 참조함
+    initial_inc = kwargs.get("increment", 0.001)   # Stall Recovery용
+    initial_dec = kwargs.get("decrement", -0.001)  # Speed Limit용
     threshold_v = kwargs.get("threshold", 3.5)
     last_calib_time = 0.0
     last_diag_time = 0.0   # 자동보정 진단용 타이머 추가
@@ -128,13 +129,13 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, **
 
                                 # 1. 과속 보정 (임계값 3.5 초과 시 감속)
                                 if avg_speed > threshold_v:
-                                    final_delta = adjust_delta # -0.001
+                                    final_delta = shared_dec.value if shared_dec else initial_dec
                                     adjust_msg = f"Speed Limit: Avg1s({avg_speed:.2f}) > {threshold_v}"
                                     dec_count += 1
                                 
-                                # 2. 저속/정지 보정 (명령은 5.0인데 실제 1초 평균이 0.5 이하일 때 0.002 가속)
+                                # 2. 저속/정지 보정 (명령은 5.0인데 실제 1초 평균이 0.5 이하일 때 가속)
                                 elif speed_cmd >= 4.5 and avg_speed <= 0.5:
-                                    final_delta = 0.001
+                                    final_delta = shared_inc.value if shared_inc else initial_inc
                                     adjust_msg = f"Stall Recovery: Avg1s({avg_speed:.2f}) <= 0.5"
                                     inc_count += 1
 
