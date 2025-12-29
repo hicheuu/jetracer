@@ -56,8 +56,8 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
     last_log_time = 0.0
     # 자동 보정용 윈도우 데이터 저장 (collections.deque 활용)
     from collections import deque
-    # runner.py에서 'window_packets'로 전달받음 (기본 16개 = 약 0.5초)
-    window_len = kwargs.get("window_packets", 16)
+    # runner.py에서 'window_packets'로 전달받음 (기본 8개 = 약 0.25초)
+    window_len = kwargs.get("window_packets", 8)
     speed_window = deque(maxlen=window_len)
     
     # 초기값은 kwargs에서 가져오되, 루프 내에서는 shared_inc/dec를 참조함
