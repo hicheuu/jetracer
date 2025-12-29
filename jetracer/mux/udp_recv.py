@@ -55,14 +55,17 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
     last_log_time = 0.0
     # 자동 보정용 윈도우 데이터 저장 (collections.deque 활용)
     from collections import deque
-    speed_window = deque()
-    # 보정 주기 및 윈도우 시간 (runner.py에서 전달받은 값 사용)
-    window_s = kwargs.get("window_duration", 3.0)
+    # runner.py에서 'window_packets'로 전달받음 (기본 33개 = 약 1초)
+    window_len = kwargs.get("window_packets", 33)
+    speed_window = deque(maxlen=window_len)
+    
     # 초기값은 kwargs에서 가져오되, 루프 내에서는 shared_inc/dec를 참조함
     initial_inc = kwargs.get("increment", 0.001)   # Stall Recovery용
     initial_dec = kwargs.get("decrement", -0.001)  # Speed Limit용
-    threshold_v = kwargs.get("threshold", 3.5)
-    last_calib_time = 0.0
+    threshold_v = kwargs.get("threshold", 3.2)
+    
+    last_seq = None
+    packet_counter = 0     # 1Hz 보정 주기를 맞추기 위한 카운터
     last_diag_time = 0.0   # 자동보정 진단용 타이머 추가
     inc_count = 0          # 증가(정지 복구) 횟수
     dec_count = 0          # 감소(과속 방지) 횟수
@@ -100,6 +103,18 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
 
                     raw_steer, raw_speed, obs_speed, seq = s1, s2, s3, s4
 
+                    # 패킷 누락 감지 (Sequence Number 추적)
+                    lost_packets = 0
+                    if last_seq is not None:
+                        expected = (last_seq + 1) & 0xFFFFFFFF # 32bit wrap-around 고려
+                        if seq != expected:
+                            lost_packets = (seq - expected) & 0xFFFFFFFF
+                            if lost_packets < 1000: # 비정상적으로 큰 값은 무시 (재시작 등)
+                                log_queue.put({"type": "LOG", "src": "UDP", "msg": f"Packet loss detected: {lost_packets} packets (seq {last_seq}->{seq})"})
+                            else:
+                                lost_packets = 0 # 예외 케이스 초기화
+                    last_seq = seq
+
                     if not math.isfinite(raw_speed):
                         continue
 
@@ -108,35 +123,34 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
 
                     now = time.time()
 
-                    # 4. 실시간 자동 보정 수행 (윈도우 방식)
+                    # 4. 실시간 자동 보정 수행 (패킷 카운트 방식)
                     if auto_calibrate:
-                        # 윈도우에 현재 데이터 추가 (정지 상태 0.0도 평균에 포함해야 함)
-                        speed_window.append((now, obs_speed))
+                        # 윈도우에 현재 데이터 추가 (deque maxlen에 의해 자동 관리됨)
+                        speed_window.append(obs_speed)
+                        packet_counter += 1
                         
-                        # 윈도우 범위를 벗어난 오래된 데이터 제거
-                        while speed_window and now - speed_window[0][0] > window_s:
-                            speed_window.popleft()
-
-                        # 차량에 명령 속도가 들어오고 있을 때만 보정 로직 작동 여부 판단 (0.5 m/s 이상)
+                        # 차량에 명령 속도가 들어오고 있을 때만 판단 (0.5 m/s 이상)
                         if speed_cmd >= 0.5:
-                            # 데이터가 쌓였고, 마지막 보정으로부터 최소 윈도우 시간만큼 지났을 때 수행
-                            if (len(speed_window) > 5) and (now - last_calib_time > window_s):
-                                # 윈도우 전체(1초) 평균
-                                avg_speed = sum([s for t, s in speed_window]) / len(speed_window)
+                            # 33개 패킷(약 1초)이 쌓였다면 보정 로직 실행
+                            if packet_counter >= window_len:
+                                avg_speed = sum(speed_window) / len(speed_window)
                                 
                                 adjust_msg = ""
                                 final_delta = 0.0
+                                reason = ""
 
-                                # 1. 과속 보정 (임계값 3.5 초과 시 감속)
+                                # 1. 과속 보정 (임계값 3.2 초과 시 감속)
                                 if avg_speed > threshold_v:
                                     final_delta = shared_dec.value if shared_dec else initial_dec
-                                    adjust_msg = f"Speed Limit: Avg1s({avg_speed:.2f}) > {threshold_v}"
+                                    adjust_msg = f"Speed Limit: Avg({avg_speed:.2f}) > {threshold_v}"
+                                    reason = "speed_limit"
                                     dec_count += 1
                                 
-                                # 2. 저속/정지 보정 (명령은 5.0인데 실제 1초 평균이 0.5 이하일 때 가속)
+                                # 2. 저속/정지 보정 (명령은 4.5 이상인데 실제 평균이 0.5 이하일 때 가속)
                                 elif speed_cmd >= 4.5 and avg_speed <= 0.5:
                                     final_delta = shared_inc.value if shared_inc else initial_inc
-                                    adjust_msg = f"Stall Recovery: Avg1s({avg_speed:.2f}) <= 0.5"
+                                    adjust_msg = f"Stall Recovery: Avg({avg_speed:.2f}) <= 0.5"
+                                    reason = "stall_recovery"
                                     inc_count += 1
 
                                 if final_delta != 0.0:
@@ -144,24 +158,29 @@ def run_udp(log_queue, stop_event, auto_calibrate=False, target_velocity=5.0, sh
                                         json.dumps({
                                             "src": "auto", 
                                             "event": "speed5_adjust", 
-                                            "delta": final_delta
+                                            "delta": final_delta,
+                                            "reason": reason,
+                                            "threshold": threshold_v
                                         }).encode(),
                                         SOCK_PATH
                                     )
                                     log_queue.put({
                                         "type": "LOG", 
                                         "src": "UDP", 
-                                        "msg": f"Auto-Calib: {adjust_msg} -> Adjust {final_delta:+.3f}"
+                                        "msg": f"Auto-Calib: {adjust_msg} -> Adjust {final_delta:+.5f}"
                                     })
-                                    last_calib_time = now
+                                
+                                packet_counter = 0 # 카운터 초기화
 
-                    # 5. MUX에 제어 메시지 송신 (obs_speed 포함)
+                    # 5. MUX에 제어 메시지 송신 (분석을 위해 cmd_speed, threshold, lost_packets 포함)
                     udsock.sendto(
                         json.dumps({
                             "src": "udp",
                             "steer": steer_cmd,
                             "speed": speed_cmd,
-                            "obs_speed": obs_speed
+                            "obs_speed": obs_speed,
+                            "threshold": threshold_v,
+                            "lost_packets": lost_packets
                         }).encode(),
                         SOCK_PATH
                     )
