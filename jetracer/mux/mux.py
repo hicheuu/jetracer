@@ -137,12 +137,17 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                     continue
 
                 if msg.get("event") == "update_speed5":
+                    if mode != "udp":
+                        continue
                     SPEED_5_PHYS = msg["val"]
                     SPEED_1_PHYS = SPEED_5_PHYS - 0.01
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Remote update: SPEED_5_PHYS → {SPEED_5_PHYS:.3f}"})
                     continue
 
                 if msg.get("event") == "speed5_adjust":
+                    if mode != "udp":
+                        continue  # 조이스틱 모드일 때는 자동 보정 무시
+                    
                     delta = msg.get("delta", 0.0)
                     reason = msg.get("reason", "unknown")
                     thr = msg.get("threshold", 0.0)
@@ -178,6 +183,10 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                     continue
 
                 if msg.get("event") == "steer_gain_up":
+                    if mode != "udp":
+                        # 조이스틱 모드에서는 수동 게인 조절을 허용할 수도 있지만, 
+                        # UDP 비활성화 상태에서의 혼선을 막기 위해 UDP 모드에서만 허용하도록 격격리
+                        continue 
                     step = 0.001
                     if car.steering < -0.1:
                         steer_thr_gain_left += step
@@ -190,6 +199,8 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                     continue
 
                 if msg.get("event") == "steer_gain_down":
+                    if mode != "udp":
+                        continue
                     step = 0.001
                     if car.steering < -0.1:
                         steer_thr_gain_left = max(0.0, steer_thr_gain_left - step)
