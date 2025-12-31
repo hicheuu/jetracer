@@ -26,13 +26,13 @@ UDP_TIMEOUT = 1.2
 def get_battery_range(pct: float) -> str:
     """
     배터리 퍼센트에 따라 저장할 디렉토리 이름을 반환합니다.
-    80-100, 60-80, 40-60, 20-40, 0-20
+    시작 시점의 배터리 잔량을 기준으로 구간을 결정합니다.
     """
-    if pct >= 80: return "80-100"
-    if pct >= 60: return "60-80"
-    if pct >= 40: return "40-60"
-    if pct >= 20: return "20-40"
-    return "0-20"
+    if pct >= 80: return "100-80"
+    if pct >= 60: return "80-60"
+    if pct >= 40: return "60-40"
+    if pct >= 20: return "40-20"
+    return "20-0"
 
 
 def speed_to_normalized_throttle(speed: float, 
