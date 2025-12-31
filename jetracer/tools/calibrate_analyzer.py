@@ -37,7 +37,7 @@ def analyze_latest_calibration():
         return
 
     if df.empty:
-        print("[ANALYZER] Error: Log file is empty.")
+        print("[ANALYZER] Error: Log file is empty. Skipping analysis.")
         return
 
     # 시간 정규화
@@ -94,23 +94,34 @@ def analyze_latest_calibration():
 
     print("="*80)
     
-    # 배터리 정보 소급 적용
-    valid_b = df['battery_pct'].dropna()
+    # 배터리 정보 소급 적용: 기존 v 방식 파일명을 위해 전압 우선 시도
+    battery_col = 'battery_v' if 'battery_v' in df.columns else 'battery_pct'
+    valid_b = df[battery_col].dropna()
     valid_b = valid_b[valid_b > 0]
     b_start, b_end = (valid_b.iloc[0], valid_b.iloc[-1]) if not valid_b.empty else (0.0, 0.0)
     
     total_duration = df['relative_time'].iloc[-1]
-    print(f" Battery Pct: {b_start:.1f}% -> {b_end:.1f}% (Delta: {b_end-b_start:+.1f}%)")
+    
+    # 리포트에는 전압/SOC 모두 표시 (있다면)
+    b_status_str = f" Battery: {b_start:.2f} -> {b_end:.2f}"
+    if 'battery_pct' in df.columns:
+        valid_soc = df['battery_pct'].dropna()
+        valid_soc = valid_soc[valid_soc > 0]
+        if not valid_soc.empty:
+            b_status_str += f" ({valid_soc.iloc[0]:.0f}% -> {valid_soc.iloc[-1]:.0f}%)"
+    
+    print(b_status_str)
     print("="*80 + "\n")
 
-    # 5. 파일명 변경
+    # 5. 파일명 변경 (기존 v 방식 복구)
     try:
         final_inc = int(df['inc'].iloc[-1] * 10000)
         final_dec = int(df['dec'].iloc[-1] * 10000)
         last_stable = int(phase_summary[-1]['stable']) if phase_summary else 0
         
         dir_name = os.path.dirname(latest_file)
-        new_name = os.path.join(dir_name, f"calib_in{final_inc}_de{final_dec}_dur{int(total_duration)}_stable{last_stable}_soc{int(b_start)}-{int(b_end)}.csv")
+        # 중요: 기존에 요청하셨던 v8.4-8.2 형식을 위해 배터리 값 사용
+        new_name = os.path.join(dir_name, f"calib_in{final_inc}_de{final_dec}_dur{int(total_duration)}_stable{last_stable}_v{b_start:.1f}-{b_end:.1f}.csv")
         os.rename(latest_file, new_name)
         print(f"[ANALYZER] Log file renamed: {new_name}")
     except Exception as e:

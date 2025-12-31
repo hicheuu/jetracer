@@ -19,9 +19,16 @@ def visualize_log(file_path):
         print(f"[VISUALIZER] Error reading CSV: {e}")
         return
 
-    # 필수 컬럼 체크 (battery -> battery_pct 대응)
-    if 'battery' in df.columns and 'battery_pct' not in df.columns:
+    if df.empty:
+        print("[VISUALIZER] Error: Log file is empty. Nothing to plot.")
+        return
+
+    # 필수 컬럼 체크 및 폴백 (old/new 포맷 호환성)
+    if 'battery_pct' not in df.columns and 'battery' in df.columns:
         df.rename(columns={'battery': 'battery_pct'}, inplace=True)
+    if 'battery_pct' not in df.columns and 'battery_v' in df.columns:
+        # v만 있는 경우 시각화용으로 pct 별칭 생성
+        df['battery_pct'] = df['battery_v']
 
     # 시간 정규화
     start_time = df['timestamp'].iloc[0]
