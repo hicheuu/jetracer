@@ -129,8 +129,18 @@ def analyze_latest_calibration():
     
     # 전체 요약
     total_lost = df['lost_packets'].sum() if 'lost_packets' in df.columns else 0
-    v_start = df['battery'].iloc[0]
-    v_end = df['battery'].iloc[-1]
+    
+    # 배터리 정보: NaN이나 0이 아닌 유효한 첫 값과 마지막 값 추출
+    valid_v = df['battery'].dropna()
+    valid_v = valid_v[valid_v > 0]
+    
+    if not valid_v.empty:
+        v_start = valid_v.iloc[0]
+        v_end = valid_v.iloc[-1]
+    else:
+        v_start = 0.0
+        v_end = 0.0
+        
     total_duration = df['relative_time'].iloc[-1]
     
     print(f" Total Packet Loss: {int(total_lost)} packets ({(total_lost/(len(df)+total_lost)*100):.2f}%)")
