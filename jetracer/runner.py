@@ -172,27 +172,23 @@ def runner(args):
                 break
         
         p_mux.join(timeout=1)
-        p_joy.join(timeout=1)
-        p_udp.join(timeout=1)
-        p_tele.join(timeout=1)
+        # 종료 시 프로세스 정리
+        for p in [p_joy, p_mux, p_udp, p_tele]:
+            if p and p.is_alive():
+                p.terminate()
+                p.join()
         
-        # 종료되지 않은 프로세스 강제 종료
-        if p_mux.is_alive(): p_mux.terminate()
-        if p_joy.is_alive(): p_joy.terminate()
-        if p_udp.is_alive(): p_udp.terminate()
-        if p_tele.is_alive(): p_tele.terminate()
-        
-        # 분석 도구 실행 (옵션 활성화 시)
-        if getattr(args, "analyze", False):
-            print("\n[RUNNER] 보정 데이터 분석을 시작합니다...")
+        # [NEW] 로그 분석 자동화: 로깅이 활성화된 경우 종료 시 항상 요약 리포트 출력 및 파일명 변경
+        if args.log_calibration:
             try:
                 from jetracer.tools.calibrate_analyzer import analyze_latest_calibration
                 analyze_latest_calibration()
             except ImportError as e:
-                print(f"[RUNNER] Error: 분석 도구(calibrate_analyzer.py)를 불러올 수 없습니다. (사유: {e})")
-                print("[RUNNER] 'pip install pandas matplotlib numpy'가 설치되어 있는지 확인하세요.")
+                print(f"\n[RUNNER] Analysis tool import failed: {e}")
             except Exception as e:
-                print(f"[RUNNER] 분석 도구 실행 중 오류 발생: {e}")
+                print(f"\n[RUNNER] Analysis failed: {e}")
+
+        print("\n[RUNNER] 모든 프로세스가 종료되었습니다.")
 
 if __name__ == "__main__":
     # 설정 파일에서 기본값 로드

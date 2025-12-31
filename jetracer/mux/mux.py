@@ -8,7 +8,7 @@ import csv
 from datetime import datetime
 
 from jetracer.core import NvidiaRacecar
-from jetracer.teleop.telemetry_common import read_voltage
+from jetracer.teleop.telemetry_common import read_voltage, read_battery_pct
 
 
 # =========================
@@ -23,11 +23,24 @@ JOY_TIMEOUT = 0.5
 UDP_TIMEOUT = 1.2
 
 
+def get_battery_range(pct: float) -> str:
+    """
+    배터리 퍼센트에 따라 저장할 디렉토리 이름을 반환합니다.
+    80-100, 60-80, 40-60, 20-40, 0-20
+    """
+    if pct >= 80: return "80-100"
+    if pct >= 60: return "60-80"
+    if pct >= 40: return "40-60"
+    if pct >= 20: return "20-40"
+    return "0-20"
+
+
 def speed_to_normalized_throttle(speed: float, 
                                  speed1_phys: float, 
                                  speed5_phys: float, 
                                  neutral: float, 
                                  gain: float) -> float:
+# ... (rest of the function as is, I will replace the start of run_mux)
     """
     속도(0.0 ~ 5.0)를 NvidiaRacecar가 사용하는 정규화된 스로틀 값(0.0 ~ 1.0)으로 변환합니다.
     
@@ -94,14 +107,18 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
     csv_file = None
     csv_writer = None
     if log_calibration:
-        os.makedirs("logs", exist_ok=True)
+        start_pct = read_battery_pct() or 0.0
+        b_range = get_battery_range(start_pct)
+        log_dir = os.path.join("logs", b_range)
+        os.makedirs(log_dir, exist_ok=True)
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_path = f"logs/calibration_{timestamp}.csv"
+        log_path = os.path.join(log_dir, f"calibration_{timestamp}.csv")
         csv_file = open(log_path, 'w', newline='')
         csv_writer = csv.writer(csv_file)
-        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-        csv_writer.writerow(["timestamp", "type", "value", "direction", "obs_value", "cmd_speed", "threshold", "reason", "lost_packets", "inc", "dec", "battery"]) 
-        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Calibration logging enabled: {log_path}"})
+        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery_pct
+        csv_writer.writerow(["timestamp", "type", "value", "direction", "obs_value", "cmd_speed", "threshold", "reason", "lost_packets", "inc", "dec", "battery_pct"]) 
+        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Calibration logging enabled: {log_path} (Start SoC: {start_pct:.1f}%)"})
 
     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Mapped Speed Mapping: Neutral={ESC_NEUTRAL:.3f}, Gain={THR_GAIN:.2f}"})
     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Loaded Steer Gains: L={steer_thr_gain_left:.3f}, R={steer_thr_gain_right:.3f}"})
@@ -158,8 +175,8 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                         cv_dir = "+" if delta > 0 else "-"
                         cur_inc = msg.get("inc", 0.0)
                         cur_dec = msg.get("dec", 0.0)
-                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-                        csv_writer.writerow([time.time(), "auto_adjust", SPEED_5_PHYS, cv_dir, "", "", thr, reason, 0, cur_inc, cur_dec, read_voltage()])
+                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery_pct
+                        csv_writer.writerow([time.time(), "auto_adjust", SPEED_5_PHYS, cv_dir, "", "", thr, reason, 0, cur_inc, cur_dec, read_battery_pct()])
                     continue
 
                 if msg.get("event") == "speed5_up":
@@ -168,8 +185,8 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                     SPEED_1_PHYS = SPEED_5_PHYS - 0.01
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (+{step})"})
                     if csv_writer:
-                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "+", "", "", "", "", 0, 0, 0, read_voltage()])
+                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery_pct
+                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "+", "", "", "", "", 0, 0, 0, read_battery_pct()])
                     continue
 
                 if msg.get("event") == "speed5_down":
@@ -178,8 +195,8 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                     SPEED_1_PHYS = SPEED_5_PHYS - 0.01
                     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (-{step})"})
                     if csv_writer:
-                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-", "", "", "", "", 0, 0, 0, read_voltage()])
+                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery_pct
+                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-", "", "", "", "", 0, 0, 0, read_battery_pct()])
                     continue
 
                 if msg.get("event") == "steer_gain_up":
@@ -229,9 +246,9 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                             lost = msg.get("lost_packets", 0)
                             cur_inc = msg.get("inc", 0.0)
                             cur_dec = msg.get("dec", 0.0)
-                            # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
+                            # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery_pct
                             # value 컬럼에 현재 튜닝 대상인 SPEED_5_PHYS 기록
-                            csv_writer.writerow([time.time(), "speed", SPEED_5_PHYS, "", obs_sp, cmd_sp, thr, "", lost, cur_inc, cur_dec, read_voltage()])
+                            csv_writer.writerow([time.time(), "speed", SPEED_5_PHYS, "", obs_sp, cmd_sp, thr, "", lost, cur_inc, cur_dec, read_battery_pct()])
 
             except BlockingIOError:
                 pass
