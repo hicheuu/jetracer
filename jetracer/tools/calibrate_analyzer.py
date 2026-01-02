@@ -100,21 +100,28 @@ def analyze_latest_calibration():
 
     print("="*80)
     
-    # 배터리 정보 소급 적용: 기존 v 방식 파일명을 위해 전압 우선 시도
-    battery_col = 'battery_v' if 'battery_v' in df.columns else 'battery_pct'
-    valid_b = df[battery_col].dropna()
-    valid_b = valid_b[valid_b > 0]
-    b_start, b_end = (valid_b.iloc[0], valid_b.iloc[-1]) if not valid_b.empty else (0.0, 0.0)
-    
-    total_duration = df['relative_time'].iloc[-1]
-    
-    # 리포트에는 전압/SOC 모두 표시 (있다면)
-    b_status_str = f" Battery: {b_start:.2f} -> {b_end:.2f}"
+    # 배터리 정보 소급 적용
+    soc_start, soc_end = 0.0, 0.0
     if 'battery_pct' in df.columns:
         valid_soc = df['battery_pct'].dropna()
         valid_soc = valid_soc[valid_soc > 0]
         if not valid_soc.empty:
-            b_status_str += f" ({valid_soc.iloc[0]:.0f}% -> {valid_soc.iloc[-1]:.0f}%)"
+            soc_start, soc_end = valid_soc.iloc[0], valid_soc.iloc[-1]
+    
+    # 전압 정보 (리포트용)
+    b_start, b_end = 0.0, 0.0
+    if 'battery_v' in df.columns:
+        valid_v = df['battery_v'].dropna()
+        valid_v = valid_v[valid_v > 0]
+        if not valid_v.empty:
+            b_start, b_end = valid_v.iloc[0], valid_v.iloc[-1]
+    
+    total_duration = df['relative_time'].iloc[-1]
+    
+    # 리포트 출력
+    b_status_str = f" Battery: {soc_start:.1f}% -> {soc_end:.1f}%"
+    if b_start > 0:
+        b_status_str += f" ({b_start:.2f}V -> {b_end:.2f}V)"
     
     print(b_status_str)
     print("="*80 + "\n")
@@ -132,9 +139,9 @@ def analyze_latest_calibration():
         last_stable = int(phase_summary[-1]['stable']) if phase_summary else 0
         
         dir_name = os.path.dirname(latest_file)
-        # 중요: 기존에 요청하셨던 v8.4-8.2 형식을 위해 배터리 값 사용 (b_start, b_end)
-        # throttle 정보(thr{avg_thr})를 추가
-        new_name = os.path.join(dir_name, f"calib_in{final_inc}_de{final_dec}_dur{int(total_duration)}_stable{last_stable}_thr{avg_thr}_v{b_start:.1f}-{b_end:.1f}.csv")
+        # 중요: 이제 파일명에도 전압 대신 퍼센트(soc) 사용
+        # calib_in..._thr352_soc100-85.csv
+        new_name = os.path.join(dir_name, f"calib_in{final_inc}_de{final_dec}_dur{int(total_duration)}_stable{last_stable}_thr{avg_thr}_soc{int(soc_start)}-{int(soc_end)}.csv")
         
         if os.path.exists(new_name):
             # 중복 방지: 동일 설정으로 여러 번 주행 시 시각 추가
