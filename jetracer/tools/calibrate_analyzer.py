@@ -113,17 +113,31 @@ def analyze_latest_calibration():
     print(b_status_str)
     print("="*80 + "\n")
 
-    # 5. 파일명 변경 (기존 v 방식 복구)
+    # 5. 파일명 변경 (기존 v 방식 복구 + 평균 스로틀 추가)
     try:
+        # 마지막 행의 inc/dec 값을 10000배 하여 정수로 표시 (예: 0.001 -> in10)
         final_inc = int(df['inc'].iloc[-1] * 10000)
         final_dec = int(df['dec'].iloc[-1] * 10000)
+        
+        # 주행 중 평균 스로틀(value 컬럼) 계산 (0.352 -> 352 형태로 저장)
+        avg_thr = int(df['value'].mean() * 1000) if not df['value'].empty else 0
+        
+        # 마지막 페이즈의 Stable 지표 가져오기
         last_stable = int(phase_summary[-1]['stable']) if phase_summary else 0
         
         dir_name = os.path.dirname(latest_file)
-        # 중요: 기존에 요청하셨던 v8.4-8.2 형식을 위해 배터리 값 사용
-        new_name = os.path.join(dir_name, f"calib_in{final_inc}_de{final_dec}_dur{int(total_duration)}_stable{last_stable}_v{b_start:.1f}-{b_end:.1f}.csv")
+        # 중요: 기존에 요청하셨던 v8.4-8.2 형식을 위해 배터리 값 사용 (b_start, b_end)
+        # throttle 정보(thr{avg_thr})를 추가
+        new_name = os.path.join(dir_name, f"calib_in{final_inc}_de{final_dec}_dur{int(total_duration)}_stable{last_stable}_thr{avg_thr}_v{b_start:.1f}-{b_end:.1f}.csv")
+        
+        if os.path.exists(new_name):
+            # 중복 방지: 동일 설정으로 여러 번 주행 시 시각 추가
+            suffix = datetime.now().strftime("_%H%M%S")
+            new_name = new_name.replace(".csv", f"{suffix}.csv")
+            
         os.rename(latest_file, new_name)
         print(f"[ANALYZER] Log file renamed: {new_name}")
+        print(f"[ANALYZER] Result Summary: Inc={final_inc}, Dec={final_dec}, Stable={last_stable}%, AvgThr={avg_thr/1000:.3f}")
     except Exception as e:
         print(f"[ANALYZER] Error renaming file: {e}")
 

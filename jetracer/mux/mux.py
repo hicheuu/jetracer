@@ -103,22 +103,37 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
     SPEED_5_PHYS = speed5_throttle if speed5_throttle is not None else car.speed5_throttle
     SPEED_1_PHYS = SPEED_5_PHYS - 0.01  
     
-    # 캐리브레이션 로깅 설정
-    csv_file = None
-    csv_writer = None
-    if log_calibration:
-        start_pct = read_battery_pct() or 0.0
-        b_range = get_battery_range(start_pct)
+    # 배터리 스무딩 설정 (노이즈 방지)
+    soc_window = deque(maxlen=30)  # 약 1초 간의 배터리 잔량 평균 (30Hz 기준)
+
+    def open_calibration_log(pct_val):
+        nonlocal csv_file, csv_writer
+        if csv_file:
+            csv_file.close()
+            
+        b_range = get_battery_range(pct_val)
         log_dir = os.path.join("logs", b_range)
         os.makedirs(log_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_path = os.path.join(log_dir, f"calibration_{timestamp}.csv")
         csv_file = open(log_path, 'w', newline='')
-        csv_writer = csv.writer(csv_file)
+        writer = csv.writer(csv_file)
         # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery_v, battery_pct
-        csv_writer.writerow(["timestamp", "type", "value", "direction", "obs_value", "cmd_speed", "threshold", "reason", "lost_packets", "inc", "dec", "battery_v", "battery_pct"]) 
-        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Calibration logging enabled: {log_path} (Start SoC: {start_pct:.1f}%)"})
+        writer.writerow(["timestamp", "type", "value", "direction", "obs_value", "cmd_speed", "threshold", "reason", "lost_packets", "inc", "dec", "battery_v", "battery_pct"]) 
+        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Calibration log opened: {log_path} (SoC: {pct_val:.1f}%)"})
+        return writer, b_range
+
+    # 초기 로깅 설정
+    csv_file = None
+    csv_writer = None
+    current_b_range = None
+    
+    if log_calibration:
+        start_pct = read_battery_pct() or 0.0
+        # 스무딩 윈도우 초기화
+        for _ in range(30): soc_window.append(start_pct)
+        csv_writer, current_b_range = open_calibration_log(start_pct)
 
     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Mapped Speed Mapping: Neutral={ESC_NEUTRAL:.3f}, Gain={THR_GAIN:.2f}"})
     log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Loaded Steer Gains: L={steer_thr_gain_left:.3f}, R={steer_thr_gain_right:.3f}"})
@@ -239,7 +254,7 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                         global last_udp_time
                         last_udp_time = time.time()
                         
-                        if csv_writer and "speed" in msg:
+                        if csv_writer and "speed" in msg and mode == "udp":
                             obs_sp = msg.get("obs_speed", 0.0)
                             cmd_sp = msg.get("speed", 0.0)
                             thr = msg.get("threshold", 0.0)
