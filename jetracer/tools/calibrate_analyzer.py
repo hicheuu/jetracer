@@ -22,6 +22,12 @@ def analyze_latest_calibration():
     # 2. 데이터 읽기
     try:
         df = pd.read_csv(latest_file)
+        if df.empty:
+            print(f"[ANALYZER] Warning: Log file '{latest_file}' is empty. Skipping analysis.")
+            return
+    except pd.errors.EmptyDataError:
+        print(f"[ANALYZER] Warning: Log file '{latest_file}' has no data. Skipping analysis.")
+        return
     except Exception as e:
         print(f"[ANALYZER] Error reading CSV: {e}")
         return

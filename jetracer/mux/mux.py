@@ -6,6 +6,7 @@ import multiprocessing
 import argparse
 import csv
 from datetime import datetime
+from collections import deque
 
 from jetracer.core import NvidiaRacecar
 from jetracer.teleop.telemetry_common import read_voltage, read_battery_pct
@@ -251,8 +252,6 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
                     # 'event'가 들어오는 보정/타임아웃 메시지는 control last_udp를 갱신하지 않음
                     if "steer" in msg and "speed" in msg:
                         last_udp = msg
-                        global last_udp_time
-                        last_udp_time = time.time()
                         
                         if csv_writer and "speed" in msg and mode == "udp":
                             obs_sp = msg.get("obs_speed", 0.0)
