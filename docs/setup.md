@@ -64,3 +64,30 @@ sudo systemctl start  battery_monitor@<username>.service
 ```
 
 서비스가 정상 작동하면 OLED 화면이 켜지며 차량 정보가 표시됩니다. 만약 화면이 켜지지 않는다면 `sudo journalctl -u battery_monitor@<username>` 명령어로 로그를 확인하세요.
+
+## 5. 와이파이 자동 연결 설정 (Headless 필수)
+
+JetRacer가 부팅될 때 GUI 로그인 없이도 와이파이가 자동으로 연결되도록 설정합니다. 이 설정을 하지 않으면 매번 모니터를 연결하여 비밀번호를 쳐야 할 수도 있습니다.
+
+아래 명령어를 복사하여 터미널에 붙여넣으세요. 이미 저장된 모든 와이파이 프로필을 '시스템 전체 연결'로 변경합니다.
+
+```bash
+nmcli -t -f NAME,TYPE connection show | grep ":802-11-wireless" | cut -d: -f1 | while read -r conn; do
+    # 현재 권한 설정 확인
+    perms=$(nmcli -g connection.permissions connection show "$conn")
+    
+    if [ -n "$perms" ]; then
+        echo "[FIX] $conn → 구성원을 전체 사용자로 변경 및 비밀번호 파일 저장 활성화"
+        # 1. 모든 사용자 접근 허용 (시스템 전체 연결)
+        # 2. Keyring 대신 설정 파일에 직접 암호 저장 (로그인 전 연결 가능)
+        sudo nmcli connection modify "$conn" \
+            connection.permissions "" \
+            802-11-wireless-security.psk-flags 0
+    else
+        echo "[OK ] $conn 이미 시스템 전체 연결로 설정되어 있습니다."
+    fi
+done
+
+# 변경사항 적용 (현재 연결된 와이파이 재시작)
+# sudo nmcli connection up "<SSID_NAME>"
+```

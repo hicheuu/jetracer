@@ -3,7 +3,8 @@
 NVIDIA JetRacer AI Kit를 위한 통합 제어 시스템입니다. 이 프로젝트는 **Multiplexer(Mux)** 구조를 통해 조이스틱과 UDP 제어를 유연하게 관리하며, 실시간 속도 보정 기능을 제공합니다.
 
 > [!TIP]
-> 처음 시작하시나요? [설치 가이드(Setup Guide)](./docs/setup.md)를 먼저 확인하여 환경을 구축하세요.
+- [설치 가이드(Setup Guide)](./docs/setup.md): 환경 구축 및 드라이버 설치
+- [와이파이 자동 연결 설정](./docs/setup.md#5-와이파이-자동-연결-설정-headless-필수): 부팅 시 자동 연결 문제 해결
 
 ## 🚀 실행 방법
 

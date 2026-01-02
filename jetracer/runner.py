@@ -204,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--speed5-throttle", type=float, default=None, help="속도 5.0일 때의 물리적 스로틀 목표값 (None인 경우 config 파일에서 로드)")
     parser.add_argument("--device", default=None, help="조이스틱 장치 경로 (예: /dev/input/event2)")
     parser.add_argument("--steer-scale", type=float, default=1.0, help="조이스틱 조향 배율")
-    parser.add_argument("--log-calibration", action="store_true", default=True, help="속도 캘리브레이션용 데이터 로깅 활성화 (기본값: True)")
+`bbbbbbbbbbbbbbbbbbbbbbbbbbb99999999999999999999999999999999`    parser.add_argument("--log-calibration", action="store_true", default=True, help="속도 캘리브레이션용 데이터 로깅 활성화 (기본값: True)")
     parser.add_argument("--no-log-calibration", action="store_false", dest="log_calibration", help="데이터 로깅 비활성화")
     parser.add_argument("--auto-calibrate", action="store_true", default=True, help="실시간 실제 속도 기반 스로틀 자동 보정 활성화 (기본값: True)")
     parser.add_argument("--no-auto-calibrate", action="store_false", dest="auto_calibrate", help="자동 보정 비활성화")
