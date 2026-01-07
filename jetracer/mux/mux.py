@@ -120,112 +120,108 @@ def run_mux(log_queue, stop_event, speed5_throttle, log_calibration=False, verbo
 
     try:
         while not stop_event.is_set():
-            try:
-                data, _ = sock.recvfrom(512)
-                msg = json.loads(data.decode())
-                src = msg.get("src")
+            # 1. 제어 메시지 소켓 전체 드레인 (지연 방지)
+            while True:
+                try:
+                    data, _ = sock.recvfrom(512)
+                    msg = json.loads(data.decode())
+                    src = msg.get("src")
+                    event = msg.get("event")
 
-                if msg.get("event") == "toggle":
-                    mode = "udp" if mode == "joystick" else "joystick"
-                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"MODE → {mode}"})
-                    log_queue.put({"type": "MODE", "mode": mode})
-                    continue
+                    if event == "toggle":
+                        mode = "udp" if mode == "joystick" else "joystick"
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"MODE → {mode}"})
+                        log_queue.put({"type": "MODE", "mode": mode})
 
-                if msg.get("event") == "estop":
-                    estop = not estop
-                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"ESTOP {'ON' if estop else 'OFF'}"})
-                    continue
+                    elif event == "estop":
+                        estop = not estop
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"ESTOP {'ON' if estop else 'OFF'}"})
 
-                if msg.get("event") == "update_speed5":
-                    SPEED_5_PHYS = msg["val"]
-                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
-                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Remote update: SPEED_5_PHYS → {SPEED_5_PHYS:.3f}"})
-                    continue
+                    elif event == "update_speed5":
+                        SPEED_5_PHYS = msg["val"]
+                        SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Remote update: SPEED_5_PHYS → {SPEED_5_PHYS:.3f}"})
 
-                if msg.get("event") == "speed5_adjust":
-                    delta = msg.get("delta", 0.0)
-                    reason = msg.get("reason", "unknown")
-                    thr = msg.get("threshold", 0.0)
-                    SPEED_5_PHYS += delta
-                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
-                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS (Auto:{reason}) → {SPEED_5_PHYS:.4f} ({delta:+.5f})"})
-                    if csv_writer:
-                        cv_dir = "+" if delta > 0 else "-"
-                        cur_inc = msg.get("inc", 0.0)
-                        cur_dec = msg.get("dec", 0.0)
-                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-                        csv_writer.writerow([time.time(), "auto_adjust", SPEED_5_PHYS, cv_dir, "", "", thr, reason, 0, cur_inc, cur_dec, read_voltage()])
-                    continue
-
-                if msg.get("event") == "speed5_up":
-                    step = 0.01 if mode == "joystick" else 0.001
-                    SPEED_5_PHYS += step
-                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
-                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (+{step})"})
-                    if csv_writer:
-                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "+", "", "", "", "", 0, 0, 0, read_voltage()])
-                    continue
-
-                if msg.get("event") == "speed5_down":
-                    step = 0.01 if mode == "joystick" else 0.001
-                    SPEED_5_PHYS -= step
-                    SPEED_1_PHYS = SPEED_5_PHYS - 0.01
-                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (-{step})"})
-                    if csv_writer:
-                        # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-                        csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-", "", "", "", "", 0, 0, 0, read_voltage()])
-                    continue
-
-                if msg.get("event") == "steer_gain_up":
-                    step = 0.001
-                    if car.steering < -0.1:
-                        steer_thr_gain_left += step
-                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [LEFT] → {steer_thr_gain_left:.3f}"})
-                    elif car.steering > 0.1:
-                        steer_thr_gain_right += step
-                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [RIGHT] → {steer_thr_gain_right:.3f}"})
-                    else:
-                        log_queue.put({"type": "LOG", "src": "MUX", "msg": "Steering neutral. Turn to adjust direction-specific gain."})
-                    continue
-
-                if msg.get("event") == "steer_gain_down":
-                    step = 0.001
-                    if car.steering < -0.1:
-                        steer_thr_gain_left = max(0.0, steer_thr_gain_left - step)
-                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [LEFT] → {steer_thr_gain_left:.3f}"})
-                    elif car.steering > 0.1:
-                        steer_thr_gain_right = max(0.0, steer_thr_gain_right - step)
-                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [RIGHT] → {steer_thr_gain_right:.3f}"})
-                    else:
-                        log_queue.put({"type": "LOG", "src": "MUX", "msg": "Steering neutral. Turn to adjust direction-specific gain."})
-                    continue
-
-                msg["ts"] = time.time()
-                if src == "joystick":
-                    last_joy = msg
-                elif src == "udp":
-                    # 'event'가 들어오는 보정/타임아웃 메시지는 control last_udp를 갱신하지 않음
-                    if "steer" in msg and "speed" in msg:
-                        last_udp = msg
-                        global last_udp_time
-                        last_udp_time = time.time()
-                        
-                        if csv_writer and "speed" in msg:
-                            obs_sp = msg.get("obs_speed", 0.0)
-                            cmd_sp = msg.get("speed", 0.0)
+                    elif event == "speed5_adjust":
+                        if not estop:
+                            delta = msg.get("delta", 0.0)
+                            reason = msg.get("reason", "unknown")
                             thr = msg.get("threshold", 0.0)
-                            lost = msg.get("lost_packets", 0)
-                            cur_inc = msg.get("inc", 0.0)
-                            cur_dec = msg.get("dec", 0.0)
-                            # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
-                            # value 컬럼에 현재 튜닝 대상인 SPEED_5_PHYS 기록
-                            csv_writer.writerow([time.time(), "speed", SPEED_5_PHYS, "", obs_sp, cmd_sp, thr, "", lost, cur_inc, cur_dec, read_voltage()])
+                            SPEED_5_PHYS += delta
+                            SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                            log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS (Auto:{reason}) → {SPEED_5_PHYS:.4f} ({delta:+.5f})"})
+                            if csv_writer:
+                                cv_dir = "+" if delta > 0 else "-"
+                                cur_inc = msg.get("inc", 0.0)
+                                cur_dec = msg.get("dec", 0.0)
+                                # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
+                                csv_writer.writerow([time.time(), "auto_adjust", SPEED_5_PHYS, cv_dir, "", "", thr, reason, 0, cur_inc, cur_dec, read_voltage()])
 
-            except BlockingIOError:
-                pass
-            except Exception as e:
-               log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Error: {e}"})
+                    elif event == "speed5_up":
+                        step = 0.01 if mode == "joystick" else 0.001
+                        SPEED_5_PHYS += step
+                        SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (+{step})"})
+                        if csv_writer:
+                            csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "+", "", "", "", "", 0, 0, 0, read_voltage()])
+
+                    elif event == "speed5_down":
+                        step = 0.01 if mode == "joystick" else 0.001
+                        SPEED_5_PHYS -= step
+                        SPEED_1_PHYS = SPEED_5_PHYS - 0.01
+                        log_queue.put({"type": "LOG", "src": "MUX", "msg": f"SPEED_5_PHYS → {SPEED_5_PHYS:.3f} (-{step})"})
+                        if csv_writer:
+                            csv_writer.writerow([time.time(), "adjust", SPEED_5_PHYS, "-", "", "", "", "", 0, 0, 0, read_voltage()])
+
+                    elif event == "steer_gain_up":
+                        step = 0.001
+                        if car.steering < -0.1:
+                            steer_thr_gain_left += step
+                            log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [LEFT] → {steer_thr_gain_left:.3f}"})
+                        elif car.steering > 0.1:
+                            steer_thr_gain_right += step
+                            log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [RIGHT] → {steer_thr_gain_right:.3f}"})
+                        else:
+                            log_queue.put({"type": "LOG", "src": "MUX", "msg": "Steering neutral. Turn to adjust direction-specific gain."})
+
+                    elif event == "steer_gain_down":
+                        step = 0.001
+                        if car.steering < -0.1:
+                            steer_thr_gain_left = max(0.0, steer_thr_gain_left - step)
+                            log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [LEFT] → {steer_thr_gain_left:.3f}"})
+                        elif car.steering > 0.1:
+                            steer_thr_gain_right = max(0.0, steer_thr_gain_right - step)
+                            log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Steer Gain [RIGHT] → {steer_thr_gain_right:.3f}"})
+                        else:
+                            log_queue.put({"type": "LOG", "src": "MUX", "msg": "Steering neutral. Turn to adjust direction-specific gain."})
+
+                    else:
+                        # 일반 제어 메시지 업데이트 (src, steer, speed 등)
+                        msg["ts"] = time.time()
+                        if src == "joystick":
+                            last_joy = msg
+                        elif src == "udp":
+                            if "steer" in msg and "speed" in msg:
+                                last_udp = msg
+                                # global last_udp_time # This line was removed as per the instruction's implied change.
+                                # last_udp_time = time.time() # This line was removed as per the instruction's implied change.
+                                
+                                if csv_writer and "speed" in msg:
+                                    obs_sp = msg.get("obs_speed", 0.0)
+                                    cmd_sp = msg.get("speed", 0.0)
+                                    thr = msg.get("threshold", 0.0)
+                                    lost = msg.get("lost_packets", 0)
+                                    cur_inc = msg.get("inc", 0.0)
+                                    cur_dec = msg.get("dec", 0.0)
+                                    # timestamp, type, value, direction, obs_value, cmd_speed, threshold, reason, lost_packets, inc, dec, battery
+                                    # value 컬럼에 현재 튜닝 대상인 SPEED_5_PHYS 기록
+                                    csv_writer.writerow([time.time(), "speed", SPEED_5_PHYS, "", obs_sp, cmd_sp, thr, "", lost, cur_inc, cur_dec, read_voltage()])
+
+                except BlockingIOError:
+                    break
+                except Exception as e:
+                    log_queue.put({"type": "LOG", "src": "MUX", "msg": f"Socket Error: {e}"})
+                    break
 
             now = time.time()
 
