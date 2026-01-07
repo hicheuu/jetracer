@@ -6,7 +6,7 @@ import time
 
 from jetracer.teleop.telemetry_common import (
     infer_car_number,
-    read_voltage,
+    read_battery_pct,
 )
 
 FMT_UPLINK = "!if"
@@ -36,16 +36,22 @@ def run_telemetry(stop_event, server_ip="192.168.0.100", server_port=5560, hz=30
         while not stop_event.is_set():
             start_time = time.monotonic()
             
-            voltage = read_voltage(battery_shm_path) or 0.0
+            soc = read_battery_pct(battery_shm_path) or 0.0
             
-            # Packet: (ID:int, Voltage:float) -> 4 + 4 = 8 bytes
-            pkt = struct.pack(FMT_UPLINK, int(vehicle_id), float(voltage))
+            # Packet: (ID:int, SoC:float) -> 4 + 4 = 8 bytes
+            pkt = struct.pack(FMT_UPLINK, int(vehicle_id), float(soc))
             sock.sendto(pkt, target)
             
             if verbose:
                 # 1초에 한 번 정도만 출력 (너무 잦음 방지)
-                if int(time.time() % 2) == 0:
+                now_s = int(time.time())
+                if now_s % 2 == 0:
+                    # 중복 출력 방지용 로직 (실제로는 sleep 때문에 크게 문제 없지만 완벽을 기함)
                     pass 
+            
+            # 2초마다 한 번씩 전압 출력하여 데이터 송신 확인 가능하게 함
+            if verbose and (int(time.monotonic()) % 2 == 0):
+                print(f"[uplink] Sending telemetry: {soc:.1f}% (ID:{vehicle_id})")
 
             # 타이머 조절
             elapsed = time.monotonic() - start_time
